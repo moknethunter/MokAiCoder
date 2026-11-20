@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mokhtar-ai-coder-api:latest
+    container_name: mokhtar-api
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_OWNER: ${GITHUB_OWNER}
+      GITHUB_REPO: ${GITHUB_REPO:-test-ai}
+      GITHUB_BRANCH: ${GITHUB_BRANCH:-main}
+    networks:
+      - mokhtar-net
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: mokhtar-ai-coder-web:latest
+    container_name: mokhtar-web
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    networks:
+      - mokhtar-net
+    restart: unless-stopped
+
+networks:
+  mokhtar-net:
+    driver: bridge
