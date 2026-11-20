@@ -1,26 +1,35 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { ProjectService } from './services/projectService.js';
 import { DependencyService } from './services/dependencyService.js';
 import { ProjectCache } from './services/cache.js';
 import { ScanRequest, ScanResponse } from './types.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 const app = Fastify({ logger: true });
+
 await app.register(cors, { origin: true });
+
+const webRoot = join(__dirname, '..', 'web');
+await app.register(fastifyStatic, {
+  root: webRoot,
+  prefix: '/',
+  wildcard: false,
+});
 
 const projectService = new ProjectService();
 const dependencyService = new DependencyService();
 const cache = new ProjectCache();
 
-app.get('/', async () => ({
-  name: 'MokhtarAiCoder',
-  version: '1.1.0',
-  status: 'running'
-}));
-
 app.get('/health', async () => ({
   status: 'ok',
-  time: new Date().toISOString()
+  time: new Date().toISOString(),
+  service: 'MokhtarAiCoder',
+  version: '1.1.0',
 }));
 
 app.post<{ Body: ScanRequest }>('/api/project/scan', async (req, reply) => {
@@ -41,7 +50,7 @@ app.post<{ Body: ScanRequest }>('/api/project/scan', async (req, reply) => {
       duplicateCount: Object.keys(graph.duplicateSymbols).length,
       totalBytes: files.reduce((s, f) => s + f.size, 0),
       graph,
-      files: files.map(f => f.path)
+      files: files.map(f => f.path),
     };
     return response;
   } catch (err) {
@@ -77,6 +86,14 @@ app.get<{ Querystring: { path: string } }>(
     return { path: file.path, content: file.content, size: file.size };
   }
 );
+
+app.setNotFoundHandler((req, reply) => {
+  if (req.url.startsWith('/api/')) {
+    reply.code(404);
+    return { error: 'Not found' };
+  }
+  return reply.sendFile('index.html');
+});
 
 const port = Number(process.env.PORT) || 8080;
 await app.listen({ port, host: '0.0.0.0' });
