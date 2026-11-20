@@ -14,9 +14,7 @@ function addMsg(text, cls) {
   chat.scrollTop = chat.scrollHeight;
 }
 
-function setStatus(s) {
-  statusEl.textContent = s;
-}
+function setStatus(s) { statusEl.textContent = s; }
 
 async function scanProject() {
   scanBtn.disabled = true;
@@ -35,8 +33,8 @@ async function scanProject() {
         `📄 ملفات: ${data.fileCount}\n` +
         `🔗 روابط: ${data.edgeCount}\n` +
         `🔄 دورات: ${data.cycleCount}\n` +
-        `🏝️ ملفات يتيمة: ${data.orphanCount}\n` +
-        `⚠️ رموز مكررة: ${data.duplicateCount}`,
+        `🏝️ يتيمة: ${data.orphanCount}\n` +
+        `⚠️ مكررة: ${data.duplicateCount}`,
       'bot'
     );
     setStatus('تم الفحص');
@@ -57,16 +55,6 @@ form.addEventListener('submit', async (e) => {
   input.value = '';
   sendBtn.disabled = true;
   addMsg(text, 'user');
-  addMsg('🤖 Llama 3 يفكر...', 'bot');
-  try {
-    // Placeholder: API المحادثة لم يُبنَ بعد، لذا نرسل scan فقط
-    // عند إضافة /api/project/chat سنستبدل هذا
-    const res = await fetch(`${API}/project/tree`);
-    if (!res.ok) throw new Error('يجب فحص المشروع أولاً');
-    addMsg('💡 المحادثة الذكية قيد التطوير. استخدم زر "فحص المشروع" حالياً.', 'bot');
-  } catch (e) {
-    addMsg('❌ ' + e.message, 'err');
-  } finally {
-    sendBtn.disabled = false;
-  }
+  addMsg('💡 المحادثة الذكية قيد التطوير — استخدم زر "فحص المشروع" حالياً.', 'bot');
+  sendBtn.disabled = false;
 });
