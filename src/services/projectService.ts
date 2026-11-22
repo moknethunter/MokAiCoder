@@ -159,11 +159,10 @@ export class ProjectService {
 
   constructor() {
     const token = process.env.GITHUB_TOKEN;
-    if (!token) throw new Error('GITHUB_TOKEN is required');
     if (!this.owner) throw new Error('GITHUB_OWNER is required');
     if (!this.repo) throw new Error('GITHUB_REPO is required');
 
-    this.octokit = new Octokit({ auth: token });
+    this.octokit = new Octokit({ auth: token || undefined });
   }
 
   async loadAllFiles(branch = this.branch): Promise<ProjectFile[]> {

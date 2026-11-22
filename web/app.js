@@ -15,6 +15,7 @@ const code = document.getElementById('code');
 const number = new Intl.NumberFormat('ar');
 
 const errorLabels = {
+  GITHUB_SETUP_REQUIRED: 'اضبط اسم المالك والمستودع على الخادم قبل الفحص.',
   INVALID_REQUEST: 'تحقّق من قيمة الفرع أو مسار الملف.',
   SCAN_IN_PROGRESS: 'هناك فحص جارٍ. حاول مجددًا بعد انتهائه.',
   SCAN_CHANGED: 'انتهت صلاحية النتيجة أو استُبدلت. شغّل فحصًا جديدًا.',

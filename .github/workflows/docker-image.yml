@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, 'mokai/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'mokai/**']
 
 permissions:
   contents: read
@@ -35,6 +35,8 @@ jobs:
           address=$(docker port mokai-ci 8080/tcp)
           curl --fail --silent --show-error --max-time 5 "http://$address/health"
           curl --fail --silent --show-error --max-time 5 "http://$address/" | grep -F 'lang="ar" dir="rtl"'
+          curl --fail --silent --show-error --max-time 5 "http://$address/chat" | grep -F 'id="chat-form"'
+          test "$(curl --silent --show-error --max-time 5 --output /dev/null --write-out '%{http_code}' "http://$address/api/ai/providers")" = 503
           docker exec mokai-ci node -e 'if (process.getuid() === 0 || process.versions.node.split(".")[0] !== "24") process.exit(1)'
       - name: Show container logs
         if: failure()

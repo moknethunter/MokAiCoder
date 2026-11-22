@@ -8,9 +8,17 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8080"
-      GITHUB_TOKEN: ${GITHUB_TOKEN:?Set GITHUB_TOKEN in .env}
-      GITHUB_OWNER: ${GITHUB_OWNER:?Set GITHUB_OWNER in .env}
-      GITHUB_REPO: ${GITHUB_REPO:?Set GITHUB_REPO in .env}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
       GITHUB_BRANCH: ${GITHUB_BRANCH:-main}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
+      MOKAI_CHAT_TOKEN: ${MOKAI_CHAT_TOKEN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_FREE_MODELS: ${OPENROUTER_FREE_MODELS:-openrouter/free}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      PAID_AI_API_KEY: ${PAID_AI_API_KEY:-}
+      PAID_AI_BASE_URL: ${PAID_AI_BASE_URL:-}
+      PAID_AI_MODELS: ${PAID_AI_MODELS:-}
+      PAID_AI_TOKEN_PARAMETER: ${PAID_AI_TOKEN_PARAMETER:-max_completion_tokens}
     restart: unless-stopped
