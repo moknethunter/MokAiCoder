@@ -98,7 +98,7 @@ export class ProjectService {
         blob.encoding === 'base64'
           ? Buffer.from(blob.content, 'base64').toString('utf-8')
           : blob.content;
-      return { path, content, size: blob.size };
+      return { path, content, size: blob.size ?? Buffer.byteLength(content) };
     } catch (err) {
       console.warn(`[project] failed ${path}:`, (err as Error).message);
       return null;

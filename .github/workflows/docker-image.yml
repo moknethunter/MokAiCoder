@@ -1,18 +1,40 @@
-name: Docker Image CI
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main, 'mokai/**']
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-
-  build:
-
+  verify:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+      - name: Build Docker image
+        run: docker build --tag mokai-ci .
+      - name: Verify container startup, runtime user, and web endpoints
+        run: |
+          docker run --detach --name mokai-ci --publish 127.0.0.1::8080 \
+            --env GITHUB_TOKEN=fixture-token \
+            --env GITHUB_OWNER=fixture-owner \
+            --env GITHUB_REPO=fixture-repo mokai-ci
+          address=$(docker port mokai-ci 8080/tcp)
+          curl --fail --silent --show-error --retry 10 --retry-connrefused "http://$address/health"
+          curl --fail --silent --show-error "http://$address/" | grep -F 'lang="ar" dir="rtl"'
+          docker exec mokai-ci node -e 'if (process.getuid() === 0 || process.versions.node.split(".")[0] !== "24") process.exit(1)'
+      - name: Show container logs
+        if: failure()
+        run: docker logs mokai-ci 2>&1 || true
