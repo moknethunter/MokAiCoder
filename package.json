@@ -1,24 +1,37 @@
 {
   "name": "mokhtar-ai-coder",
-  "version": "1.1.0",
-  "description": "AI code assistant — unified API + Web UI",
+  "version": "1.2.0",
+  "description": "GitHub project scanner with an Arabic web interface",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src test web",
+    "test": "npm run build && node --import tsx --test",
+    "test:watch": "node --import tsx --test --watch",
+    "format": "prettier --write --single-quote \"src/**/*.ts\" \"test/**/*.js\" \"web/**/*.{html,js,css}\""
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": "24.x"
+  },
   "dependencies": {
-    "@fastify/cors": "^9.0.1",
-    "@fastify/static": "^7.0.4",
-    "@octokit/rest": "^20.1.1",
-    "fastify": "^4.28.1"
+    "@fastify/cors": "^11.4.3",
+    "@fastify/static": "^10.1.12",
+    "@octokit/request-error": "^7.1.2",
+    "@octokit/rest": "^22.0.1",
+    "fastify": "^5.12.8",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24",
+    "eslint": "^10.15.0",
+    "globals": "^16.5.0",
+    "prettier": "^3.10.1",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "typescript-eslint": "^8.73.0"
   }
 }
