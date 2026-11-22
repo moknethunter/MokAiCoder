@@ -4,6 +4,7 @@ import fastifyStatic from '@fastify/static';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { registerAi } from './ai/routes.js';
 import { AppError, registerErrorHandler } from './plugins/errorHandler.js';
 import { isRepositoryPath, ProjectService } from './services/projectService.js';
 import { DependencyService } from './services/dependencyService.js';
@@ -61,7 +62,7 @@ export async function createApp({ logger = true } = {}) {
     wildcard: false,
   });
 
-  const projectService = new ProjectService();
+  let projectService: ProjectService | undefined;
   const dependencyService = new DependencyService();
   const cache = new ProjectCache();
   let scanning = false;
@@ -77,13 +78,24 @@ export async function createApp({ logger = true } = {}) {
     version,
   }));
 
+  registerAi(app, cache);
+  app.get('/chat', async (_req, reply) => reply.sendFile('chat.html'));
+
   app.post('/api/project/scan', async (req, reply) => {
     const { branch } = scanSchema.parse(req.body === undefined ? {} : req.body);
+    if (!process.env.GITHUB_OWNER || !process.env.GITHUB_REPO) {
+      throw new AppError(
+        503,
+        'GITHUB_SETUP_REQUIRED',
+        'Configure the GitHub owner and repository',
+      );
+    }
     if (scanning)
       throw new AppError(409, 'SCAN_IN_PROGRESS', 'A scan is already running');
     scanning = true;
 
     try {
+      projectService ??= new ProjectService();
       const files = await projectService.loadAllFiles(branch);
       const graph = dependencyService.buildGraph(files);
       const response: ScanResponse = {
@@ -107,9 +119,10 @@ export async function createApp({ logger = true } = {}) {
     }
   });
 
-  app.get('/api/project/tree', async () => {
+  app.get('/api/project/tree', async (_req, reply) => {
     const snapshot = cache.current;
     if (!snapshot) throw new AppError(409, 'SCAN_REQUIRED', 'Run scan first');
+    reply.header('X-Scan-Id', snapshot.id);
     return Array.from(snapshot.files.values(), ({ path, size }) => ({
       path,
       size,

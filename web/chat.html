@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MokAiCoder | محادثة برمجية</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/chat.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <span class="wordmark" dir="ltr">MokAiCoder</span>
+        <nav class="app-nav" aria-label="التنقل">
+          <a href="/">فحص المشروع</a>
+          <a href="/chat" aria-current="page">المحادثة</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="shell chat-shell">
+      <h1>محادثة برمجية</h1>
+
+      <form id="unlock" class="panel chat-panel">
+        <label for="chat-token">رمز وصول MokAiCoder</label>
+        <div class="chat-unlock">
+          <input
+            id="chat-token"
+            name="token"
+            type="password"
+            dir="ltr"
+            minlength="24"
+            required
+            autocomplete="current-password"
+          />
+          <button type="submit" class="chat-primary">فتح المحادثة</button>
+        </div>
+      </form>
+
+      <p id="chat-status" class="status" role="status" hidden></p>
+
+      <section
+        id="chat-room"
+        class="panel chat-panel"
+        hidden
+        aria-labelledby="chat-settings"
+      >
+        <div class="chat-heading">
+          <h2 id="chat-settings">النموذج</h2>
+          <button id="chat-reset" type="button">محادثة جديدة</button>
+          <button id="chat-lock" type="button">قفل</button>
+        </div>
+
+        <div class="chat-selects">
+          <div>
+            <label for="chat-provider">المزوّد</label
+            ><select id="chat-provider"></select>
+          </div>
+          <div>
+            <label for="chat-model">النموذج</label
+            ><select id="chat-model" dir="ltr"></select>
+          </div>
+        </div>
+
+        <ol
+          id="chat-messages"
+          class="chat-messages"
+          aria-label="سجل المحادثة"
+        ></ol>
+
+        <form id="chat-form">
+          <label for="chat-message">سؤالك</label>
+          <textarea
+            id="chat-message"
+            rows="3"
+            dir="auto"
+            maxlength="6000"
+            required
+          ></textarea>
+
+          <details class="chat-attachment">
+            <summary>إرفاق ملف من آخر فحص</summary>
+            <button id="chat-load-files" type="button">
+              حمّل قائمة الملفات
+            </button>
+            <label for="chat-file">الملف</label>
+            <select id="chat-file" dir="ltr">
+              <option value="">دون ملف</option>
+            </select>
+            <label class="chat-choice" id="chat-share-label" hidden>
+              <input id="chat-share" type="checkbox" />
+              أوافق على إرسال مقتطف من هذا الملف إلى المزوّد السحابي لهذا الطلب.
+            </label>
+          </details>
+
+          <label class="chat-choice" id="chat-paid-label" hidden>
+            <input id="chat-paid" type="checkbox" />
+            أوافق على أن هذا الطلب قد يخصم من رصيد المزوّد المدفوع.
+          </label>
+
+          <div class="chat-actions">
+            <button id="chat-send" type="submit" class="chat-primary">
+              إرسال
+            </button>
+            <button id="chat-stop" type="button" hidden>إيقاف الرد</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
