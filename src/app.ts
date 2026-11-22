@@ -1,21 +1,60 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { ProjectService } from './services/projectService.js';
+import { z } from 'zod';
+import { AppError, registerErrorHandler } from './plugins/errorHandler.js';
+import { isRepositoryPath, ProjectService } from './services/projectService.js';
 import { DependencyService } from './services/dependencyService.js';
 import { ProjectCache } from './services/cache.js';
 import type { ScanRequest, ScanResponse } from './types.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const webRoot = fileURLToPath(new URL('../web/', import.meta.url));
+const { version } = createRequire(import.meta.url)('../package.json') as {
+  version: string;
+};
+const scanSchema: z.ZodType<ScanRequest> = z.object({
+  branch: z
+    .string()
+    .min(1)
+    .max(100)
+    .refine(
+      (ref) =>
+        isRepositoryPath(ref) &&
+        !/[ ~^:?*[\\]/.test(ref) &&
+        !ref.includes('..') &&
+        !ref.includes('@{') &&
+        ref !== '@' &&
+        !ref.endsWith('.') &&
+        ref
+          .split('/')
+          .every((part) => !part.startsWith('.') && !part.endsWith('.lock')),
+      'Expected a valid Git ref',
+    )
+    .optional(),
+});
+const fileQuerySchema = z.object({
+  path: z
+    .string()
+    .refine(isRepositoryPath, 'Expected a repository-relative path'),
+  scanId: z.uuid().optional(),
+});
 
 export async function createApp({ logger = true } = {}) {
-  const app = Fastify({ logger });
+  const app = Fastify({
+    logger: logger
+      ? { redact: ['req.headers.authorization', 'req.headers.cookie'] }
+      : false,
+    bodyLimit: 16 * 1024,
+  });
 
-  await app.register(cors, { origin: true });
-
-  const webRoot = join(__dirname, '..', 'web');
+  registerErrorHandler(app);
+  const allowedOrigin = process.env.CORS_ORIGIN?.trim();
+  await app.register(cors, {
+    origin: allowedOrigin ? [allowedOrigin] : false,
+    exposedHeaders: ['X-Scan-Id', 'Retry-After'],
+  });
   await app.register(fastifyStatic, {
     root: webRoot,
     prefix: '/',
@@ -25,75 +64,83 @@ export async function createApp({ logger = true } = {}) {
   const projectService = new ProjectService();
   const dependencyService = new DependencyService();
   const cache = new ProjectCache();
+  let scanning = false;
+
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+  });
 
   app.get('/health', async () => ({
     status: 'ok',
     time: new Date().toISOString(),
     service: 'MokhtarAiCoder',
-    version: '1.1.0',
+    version,
   }));
 
-  app.post<{ Body: ScanRequest }>('/api/project/scan', async (req, reply) => {
+  app.post('/api/project/scan', async (req, reply) => {
+    const { branch } = scanSchema.parse(req.body === undefined ? {} : req.body);
+    if (scanning)
+      throw new AppError(409, 'SCAN_IN_PROGRESS', 'A scan is already running');
+    scanning = true;
+
     try {
-      const files = await projectService.loadAllFiles(req.body?.branch);
+      const files = await projectService.loadAllFiles(branch);
       const graph = dependencyService.buildGraph(files);
-
-      cache.files = files;
-      cache.graph = graph;
-      cache.scannedAt = new Date();
-      cache.branch = req.body?.branch || '';
-
       const response: ScanResponse = {
         fileCount: files.length,
-        edgeCount: Object.values(graph.edges).reduce((s, v) => s + v.length, 0),
+        edgeCount: Object.values(graph.edges).reduce(
+          (count, dependencies) => count + dependencies.length,
+          0,
+        ),
         cycleCount: graph.cycles.length,
         orphanCount: graph.orphans.length,
         duplicateCount: Object.keys(graph.duplicateSymbols).length,
-        totalBytes: files.reduce((s, f) => s + f.size, 0),
+        totalBytes: files.reduce((size, file) => size + file.size, 0),
         graph,
-        files: files.map(f => f.path),
+        files: files.map((file) => file.path),
       };
+
+      reply.header('X-Scan-Id', cache.set(files, graph));
       return response;
-    } catch (err) {
-      reply.code(500);
-      return { error: (err as Error).message };
+    } finally {
+      scanning = false;
     }
   });
 
-  app.get('/api/project/tree', async (_req, reply) => {
-    if (cache.isEmpty) {
-      reply.code(409);
-      return { error: 'Run scan first' };
-    }
-    return cache.files.map(f => ({ path: f.path, size: f.size }));
+  app.get('/api/project/tree', async () => {
+    const snapshot = cache.current;
+    if (!snapshot) throw new AppError(409, 'SCAN_REQUIRED', 'Run scan first');
+    return Array.from(snapshot.files.values(), ({ path, size }) => ({
+      path,
+      size,
+    }));
   });
 
-  app.get('/api/project/graph', async (_req, reply) => {
-    if (!cache.graph) {
-      reply.code(409);
-      return { error: 'Run scan first' };
-    }
-    return cache.graph;
+  app.get('/api/project/graph', async () => {
+    const snapshot = cache.current;
+    if (!snapshot) throw new AppError(409, 'SCAN_REQUIRED', 'Run scan first');
+    return snapshot.graph;
   });
 
-  app.get<{ Querystring: { path: string } }>(
-    '/api/project/file',
-    async (req, reply) => {
-      const file = cache.files.find(f => f.path === req.query.path);
-      if (!file) {
-        reply.code(404);
-        return { error: `File ${req.query.path} not in cache` };
-      }
-      return { path: file.path, content: file.content, size: file.size };
+  app.get('/api/project/file', async (req) => {
+    const { path, scanId } = fileQuerySchema.parse(req.query);
+    const snapshot = cache.current;
+    if (scanId && snapshot?.id !== scanId) {
+      throw new AppError(
+        409,
+        'SCAN_CHANGED',
+        'The scan result has changed or expired',
+      );
     }
-  );
+    const file = snapshot?.files.get(path);
+    if (!file) throw new AppError(404, 'FILE_NOT_FOUND', 'File not in cache');
+    return { path: file.path, content: file.content, size: file.size };
+  });
 
   app.setNotFoundHandler((req, reply) => {
-    if (req.url.startsWith('/api/')) {
-      reply.code(404);
-      return { error: 'Not found' };
-    }
-    return reply.sendFile('index.html');
+    if (req.method === 'GET' && req.url.split('?')[0] === '/')
+      return reply.sendFile('index.html');
+    throw new AppError(404, 'NOT_FOUND', 'Not found');
   });
 
   return app;

@@ -35,6 +35,7 @@ jobs:
           curl --fail --silent --show-error --retry 10 --retry-connrefused "http://$address/health"
           curl --fail --silent --show-error "http://$address/" | grep -F 'lang="ar" dir="rtl"'
           docker exec mokai-ci node -e 'if (process.getuid() === 0 || process.versions.node.split(".")[0] !== "24") process.exit(1)'
+          timeout 45s bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" mokai-ci)" = healthy ]; do sleep 2; done'
       - name: Show container logs
         if: failure()
         run: docker logs mokai-ci 2>&1 || true

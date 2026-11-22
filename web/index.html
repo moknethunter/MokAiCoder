@@ -1,49 +1,115 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MokhtarAiCoder</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .app { max-width: 800px; margin: 0 auto; height: 100vh; display: flex; flex-direction: column; }
-    header { padding: 16px; background: #1e293b; border-bottom: 1px solid #334155; }
-    header h1 { margin: 0; font-size: 18px; }
-    header small { color: #94a3b8; }
-    #chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-    .msg { padding: 10px 14px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; word-wrap: break-word; }
-    .user { align-self: flex-start; background: #2563eb; color: white; }
-    .bot { align-self: flex-end; background: #1e293b; border: 1px solid #334155; }
-    .err { align-self: center; background: #7f1d1d; color: #fecaca; font-size: 13px; }
-    form { display: flex; gap: 8px; padding: 12px; background: #1e293b; border-top: 1px solid #334155; }
-    input[type="text"] { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 15px; }
-    button { padding: 12px 20px; border-radius: 8px; border: none; background: #10b981; color: white; font-weight: 600; cursor: pointer; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .scan-bar { display: flex; gap: 8px; padding: 8px 12px; background: #0f172a; border-bottom: 1px solid #334155; align-items: center; }
-    .scan-bar button { background: #6366f1; padding: 8px 14px; font-size: 13px; }
-    .status { font-size: 12px; color: #94a3b8; }
-  </style>
-</head>
-<body>
-  <div class="app">
-    <header>
-      <h1>MokhtarAiCoder</h1>
-      <small>مساعد برمجي — واجهة دردشة</small>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MokAiCoder | فحص المشروع</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <span class="wordmark" dir="ltr">MokAiCoder</span>
+        <span class="topbar-label">فحص مستودعات GitHub</span>
+      </div>
     </header>
 
-    <div class="scan-bar">
-      <button id="scanBtn">🔎 فحص المشروع</button>
-      <span class="status" id="status">جاهز</span>
-    </div>
+    <main class="shell">
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-copy">
+          <h1 id="page-title">فحص المشروع</h1>
+          <p>
+            تتبّع التبعيات واعثر على الدورات والملفات المعزولة والرموز المكررة.
+          </p>
+        </div>
+        <form id="scan-form" class="scan-form">
+          <label for="branch">الفرع أو المرجع</label>
+          <div class="scan-controls">
+            <input
+              id="branch"
+              type="text"
+              dir="ltr"
+              maxlength="100"
+              autocomplete="off"
+              spellcheck="false"
+              aria-describedby="branch-hint"
+              placeholder="feature/example"
+            />
+            <button id="scanBtn" type="submit">فحص المشروع</button>
+          </div>
+          <small id="branch-hint"
+            >اترك الحقل فارغًا لاستخدام الفرع الافتراضي.</small
+          >
+        </form>
+      </section>
 
-    <div id="chat"></div>
+      <p class="status" id="status" role="status">جاهز للفحص</p>
 
-    <form id="form">
-      <input type="text" id="input" placeholder="اكتب تعليماتك..." autocomplete="off" />
-      <button type="submit" id="sendBtn">إرسال</button>
-    </form>
-  </div>
-  <script src="/app.js"></script>
-</body>
+      <section id="results" hidden aria-labelledby="results-title">
+        <header class="section-heading">
+          <h2 id="results-title">آخر فحص ناجح</h2>
+          <p id="result-ref"></p>
+        </header>
+        <dl class="metrics">
+          <div>
+            <dt>الملفات</dt>
+            <dd id="file-count">—</dd>
+          </div>
+          <div>
+            <dt>التبعيات</dt>
+            <dd id="edge-count">—</dd>
+          </div>
+          <div>
+            <dt>الدورات</dt>
+            <dd id="cycle-count">—</dd>
+          </div>
+          <div>
+            <dt>الملفات المعزولة</dt>
+            <dd id="orphan-count">—</dd>
+          </div>
+          <div>
+            <dt>الرموز المكررة</dt>
+            <dd id="duplicate-count">—</dd>
+          </div>
+        </dl>
+
+        <div class="results-grid">
+          <section class="panel" aria-labelledby="findings-title">
+            <h3 id="findings-title">تفاصيل التبعيات</h3>
+            <div id="findings"></div>
+          </section>
+          <section class="panel" aria-labelledby="files-title">
+            <h3 id="files-title">ملفات المشروع</h3>
+            <label for="filter">ابحث بمسار الملف</label>
+            <input
+              id="filter"
+              type="search"
+              dir="ltr"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <p class="file-status" id="files-status" role="status"></p>
+            <ul id="files" class="file-list"></ul>
+            <section
+              id="preview"
+              class="preview"
+              hidden
+              aria-labelledby="preview-title"
+            >
+              <h4 id="preview-title" dir="ltr"></h4>
+              <p id="preview-status" role="status"></p>
+              <pre
+                id="code"
+                dir="ltr"
+                tabindex="0"
+                aria-labelledby="preview-title"
+                hidden
+              ></pre>
+            </section>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
 </html>
