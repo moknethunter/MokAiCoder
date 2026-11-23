@@ -6,6 +6,5 @@ dist
 .env.*
 !.env.example
 *.log
-README.md
 .vscode
 .idea
