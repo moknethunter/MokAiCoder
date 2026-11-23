@@ -13,10 +13,39 @@ destination="${1:-$source_dir/build/MokAiCoder-Android.apk}"
 
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-mkdir -p "$work/classes" "$work/dex" "$(dirname "$destination")"
+mkdir -p "$work/classes" "$work/dex" "$work/native" "$(dirname "$destination")"
+
+vosk_version=0.3.75
+jna_version=5.18.1
+vosk_sha256=ab2f8b91ac8051561aa325546b35fed9a68b36b8121bac5c6fb927525c4adfad
+jna_sha256=7f053e3ec99e14dd71259c82c1c8a02738d64a13c31226b2acc170f3060951e0
+maven="https://repo.maven.apache.org/maven2"
+vosk="${MOKAI_ANDROID_VOSK_AAR:-$work/vosk.aar}"
+jna="${MOKAI_ANDROID_JNA_AAR:-$work/jna.aar}"
+if [[ -z "${MOKAI_ANDROID_VOSK_AAR:-}" ]]; then
+  curl -fsSL --retry 3 -o "$vosk" "$maven/com/alphacephei/vosk-android/$vosk_version/vosk-android-$vosk_version.aar"
+fi
+if [[ -z "${MOKAI_ANDROID_JNA_AAR:-}" ]]; then
+  curl -fsSL --retry 3 -o "$jna" "$maven/net/java/dev/jna/jna/$jna_version/jna-$jna_version.aar"
+fi
+
+printf '%s  %s\n' "$vosk_sha256" "$vosk" "$jna_sha256" "$jna" | sha256sum -c
+unzip -p "$vosk" classes.jar > "$work/vosk.jar"
+unzip -p "$jna" classes.jar > "$work/jna.jar"
+for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+  lib="$work/native/lib/$abi"
+  mkdir -p "$lib"
+  unzip -p "$vosk" "jni/$abi/libvosk.so" > "$lib/libvosk.so"
+  unzip -p "$jna" "jni/$abi/libjnidispatch.so" > "$lib/libjnidispatch.so"
+done
+
+package_options=()
+if [[ -n "${MOKAI_ANDROID_APPLICATION_ID:-}" ]]; then
+  package_options=(--rename-manifest-package "$MOKAI_ANDROID_APPLICATION_ID")
+fi
 
 "$tools_dir/aapt2" compile --dir "$source_dir/res" -o "$work/resources.zip"
-"$tools_dir/aapt2" link -I "$platform" --manifest "$source_dir/AndroidManifest.xml" \
+"$tools_dir/aapt2" link -I "$platform" --manifest "$source_dir/AndroidManifest.xml" "${package_options[@]}" \
   -o "$work/app.apk" "$work/resources.zip"
 
 compiler=(javac)
@@ -25,11 +54,12 @@ if [[ -n "${MOKAI_ANDROID_ECJ_JAR:-}" ]]; then
 fi
 mapfile -d '' -t sources < <(find "$source_dir/src" -type f -name '*.java' -print0)
 "${compiler[@]}" -source 8 -target 8 -proc:none -encoding UTF-8 \
-  -bootclasspath "$platform:$tools_dir/core-lambda-stubs.jar" -d "$work/classes" "${sources[@]}"
+  -bootclasspath "$platform:$tools_dir/core-lambda-stubs.jar" -classpath "$work/vosk.jar:$work/jna.jar" -d "$work/classes" "${sources[@]}"
 (cd "$work/classes" && zip -q -r "$work/classes.jar" .)
-"$tools_dir/d8" --release --min-api 26 --lib "$platform" --output "$work/dex" "$work/classes.jar"
+"$tools_dir/d8" --release --min-api 26 --lib "$platform" --output "$work/dex" "$work/classes.jar" "$work/vosk.jar" "$work/jna.jar"
 zip -q -j "$work/app.apk" "$work/dex"/classes*.dex
-"$tools_dir/zipalign" -f 4 "$work/app.apk" "$work/aligned.apk"
+(cd "$work/native" && zip -q -0 -r "$work/app.apk" lib)
+"$tools_dir/zipalign" -P 16 -f 4 "$work/app.apk" "$work/aligned.apk"
 "$tools_dir/apksigner" sign --ks "$MOKAI_ANDROID_KEYSTORE" \
   --ks-key-alias "${MOKAI_ANDROID_KEY_ALIAS:-mokai}" --ks-pass env:MOKAI_ANDROID_KS_PASS \
   --key-pass env:MOKAI_ANDROID_KS_PASS --v4-signing-enabled false \

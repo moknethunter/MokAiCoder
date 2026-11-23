@@ -2,6 +2,7 @@ package org.mokai.coder;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -95,6 +96,11 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams scanSize = new LinearLayout.LayoutParams(-2, -2);
         scanSize.setMarginStart(dp(6));
         toolbar.addView(scan, scanSize);
+        Button bots = button("البوتات", false);
+        bots.setOnClickListener(view -> startActivity(new Intent(this, BotActivity.class)));
+        LinearLayout.LayoutParams botSize = new LinearLayout.LayoutParams(-2, -2);
+        botSize.setMarginStart(dp(6));
+        toolbar.addView(bots, botSize);
         root.addView(toolbar);
 
         scroll = new ScrollView(this);
