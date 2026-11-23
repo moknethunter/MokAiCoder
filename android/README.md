@@ -32,4 +32,4 @@ MOKAI_ANDROID_BUILD_LOCAL_MODELS=1 ./android/build.sh android/build/MokAiCoder-A
 
 Install Android NDK 28.2.13676358, CMake, and Ninja for the full build with local models enabled. The script retrieves pinned Vosk and JNA dependencies. The native build uses a pinned llama.cpp revision.
 
-GitHub Actions signs previews with a per-run key. The full preview uses `org.mokai.coder.assistant.preview`. To distribute an update over an existing installation, build with the same package ID and signing key as that installation.
+GitHub Actions signs previews with a per-run key. The full preview uses `org.mokai.coder.interface.preview`. To distribute an update over an existing installation, build with the same package ID and signing key as that installation.

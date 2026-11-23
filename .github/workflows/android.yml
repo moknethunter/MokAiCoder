@@ -68,12 +68,16 @@ jobs:
       - name: Build signed project assistant preview
         env:
           MOKAI_ANDROID_KS_PASS: preview-test
-          MOKAI_ANDROID_APPLICATION_ID: org.mokai.coder.assistant.preview
+          MOKAI_ANDROID_APPLICATION_ID: org.mokai.coder.interface.preview
           MOKAI_ANDROID_BUILD_LOCAL_MODELS: '1'
         run: |
           export MOKAI_ANDROID_KEYSTORE="$RUNNER_TEMP/mokai-preview.jks"
           ./android/build.sh "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk"
           unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" | grep -Fx 'lib/arm64-v8a/libmokai_llm.so'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" |
+            grep -F "package: name='org.mokai.coder.interface.preview'"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump resources "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" |
+            grep -F 'mipmap/mokai_launcher'
       - uses: actions/upload-artifact@v4
         with:
           name: MokAiCoder-Assistant-Preview
