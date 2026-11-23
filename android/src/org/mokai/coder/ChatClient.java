@@ -49,7 +49,7 @@ final class ChatClient {
                     || parsed.getFragment() != null) {
                 throw new IllegalArgumentException("أدخل رابط HTTPS صالحًا لخادم MokAiCoder.");
             }
-            if (model.trim().isEmpty()) {
+            if (model.trim().isEmpty() && !"grok".equals(provider)) {
                 throw new IllegalArgumentException("أدخل معرّف نموذج الخادم.");
             }
             if (!reviewer.isEmpty() && (reviewer.equals(provider) || reviewModel.trim().isEmpty())) {
@@ -94,7 +94,7 @@ final class ChatClient {
         String chat(Settings settings, JSONArray messages, Listener listener)
                 throws IOException, JSONException {
             JSONObject request = new JSONObject();
-            request.put("model", settings.model);
+            request.put("model", settings.model.isEmpty() ? firstGrokModel(settings) : settings.model);
             if (settings.server) {
                 request.put("provider", settings.provider);
                 request.put("messages", messages);
@@ -154,6 +154,28 @@ final class ChatClient {
             }
         }
 
+        private String firstGrokModel(Settings settings) throws IOException, JSONException {
+            HttpsURLConnection active = connect(settings, "api/ai/providers/grok/models", null);
+            try {
+                verifyStatus(active, true);
+                try (BufferedReader reader = reader(active)) {
+                    StringBuilder result = new StringBuilder();
+                    char[] chunk = new char[2048];
+                    for (int count; (count = reader.read(chunk)) != -1;) {
+                        if (cancelled) throw new IOException("أوقفت الطلب.");
+                        if (result.length() + count > 64_000) throw new IOException("قائمة نماذج Grok كبيرة.");
+                        result.append(chunk, 0, count);
+                    }
+                    JSONObject model = new JSONArray(result.toString()).optJSONObject(0);
+                    if (model != null && !model.optString("id").isEmpty()) return model.getString("id");
+                    throw new IOException("لم يعرض الخادم نموذج Grok. تحقق من إعداد XAI_MODELS.");
+                }
+            } finally {
+                active.disconnect();
+                connection = null;
+            }
+        }
+
         private HttpsURLConnection connect(Settings settings, String path, JSONObject request)
                 throws IOException {
             HttpsURLConnection active =
@@ -164,11 +186,15 @@ final class ChatClient {
                 active.setInstanceFollowRedirects(false);
                 active.setConnectTimeout(12_000);
                 active.setReadTimeout(settings.collaborates() ? 185_000 : 95_000);
+                active.setRequestProperty("Authorization", "Bearer " + settings.secret);
+                if (request == null) {
+                    active.setRequestProperty("Accept", "application/json");
+                    return active;
+                }
                 active.setRequestMethod("POST");
                 active.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 active.setRequestProperty("Accept", "api/project/scan".equals(path)
                         ? "application/json" : "text/event-stream");
-                active.setRequestProperty("Authorization", "Bearer " + settings.secret);
                 active.setDoOutput(true);
                 byte[] bytes = request.toString().getBytes(StandardCharsets.UTF_8);
                 active.setFixedLengthStreamingMode(bytes.length);

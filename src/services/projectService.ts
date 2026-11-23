@@ -153,20 +153,29 @@ function githubError(error: unknown, signal: AbortSignal): AppError {
 
 export class ProjectService {
   private readonly octokit: Octokit;
-  private readonly owner = process.env.GITHUB_OWNER || '';
-  private readonly repo = process.env.GITHUB_REPO || '';
-  private readonly branch = process.env.GITHUB_BRANCH || 'main';
+  private readonly owner: string;
+  private readonly repo: string;
+  private readonly branch: string;
 
-  constructor() {
-    const token = process.env.GITHUB_TOKEN;
+  constructor(env = process.env) {
+    const token = env.GITHUB_TOKEN || env.MOKAI_GITHUB_WRITE_TOKEN;
+    this.owner = env.GITHUB_OWNER || '';
+    this.repo = env.GITHUB_REPO || '';
+    this.branch = env.GITHUB_BRANCH || 'main';
     if (!this.owner) throw new Error('GITHUB_OWNER is required');
     if (!this.repo) throw new Error('GITHUB_REPO is required');
 
     this.octokit = new Octokit({ auth: token || undefined });
   }
 
-  async loadAllFiles(branch = this.branch): Promise<ProjectFile[]> {
-    const signal = AbortSignal.timeout(SCAN_TIMEOUT_MS);
+  async loadAllFiles(
+    branch = this.branch,
+    cancellation?: AbortSignal,
+  ): Promise<ProjectFile[]> {
+    const timeout = AbortSignal.timeout(SCAN_TIMEOUT_MS);
+    const signal = cancellation
+      ? AbortSignal.any([timeout, cancellation])
+      : timeout;
     try {
       const { data: tree } = await this.octokit.git.getTree({
         owner: this.owner,

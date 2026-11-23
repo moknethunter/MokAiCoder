@@ -2,6 +2,9 @@ package org.mokai.coder;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.ActivityNotFoundException;
+import android.net.Uri;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -95,7 +98,21 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams scanSize = new LinearLayout.LayoutParams(-2, -2);
         scanSize.setMarginStart(dp(6));
         toolbar.addView(scan, scanSize);
+        Button bots = button("البوتات", false);
+        bots.setOnClickListener(view -> startActivity(new Intent(this, BotActivity.class)));
+        LinearLayout.LayoutParams botSize = new LinearLayout.LayoutParams(-2, -2);
+        botSize.setMarginStart(dp(6));
+        toolbar.addView(bots, botSize);
         root.addView(toolbar);
+        LinearLayout projectActions = row();
+        projectActions.setPadding(dp(12), 0, dp(12), 0);
+        Button project = button("مساعد المشروع", false);
+        project.setOnClickListener(view -> launchProject());
+        projectActions.addView(project, new LinearLayout.LayoutParams(0, -2, 1));
+        Button localModels = button("نماذج الهاتف", false);
+        localModels.setOnClickListener(view -> openLocalModels(""));
+        projectActions.addView(localModels, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(projectActions);
 
         scroll = new ScrollView(this);
         scroll.setFillViewport(false);
@@ -162,7 +179,7 @@ public final class MainActivity extends Activity {
         LinearLayout serverFields = column();
         addField(serverFields, "رابط خادم MokAiCoder", address);
         addField(serverFields, "المزوّد المهيّأ على الخادم", provider);
-        addField(serverFields, "معرّف النموذج", model);
+        addField(serverFields, "معرّف النموذج (اختياري لـ Grok)", model);
         addField(serverFields, "مزوّد المراجعة", reviewer);
         LinearLayout reviewFields = column();
         addField(reviewFields, "معرّف نموذج المراجعة", reviewModel);
@@ -173,7 +190,7 @@ public final class MainActivity extends Activity {
         TextView error = label("", 13, Color.rgb(151, 48, 43), false);
         fields.addView(error);
 
-        int initialProvider = settings == null ? 0 : providerIndex(settings.provider);
+        int initialProvider = settings == null ? providerIndex("grok") : providerIndex(settings.provider);
         provider.setSelection(initialProvider);
         int initialReviewer = settings == null || !settings.collaborates()
                 ? 0 : providerIndex(settings.reviewer) + 1;
@@ -236,7 +253,7 @@ public final class MainActivity extends Activity {
                                 : ChatClient.Settings.free(key);
                         history.clear();
                         transcript.removeAllViews();
-                        source.setText(server ? "خادم المشروع · " + settings.model : "OpenRouter · نموذج مجاني");
+                        source.setText(server ? "خادم المشروع · " + (settings.model.isEmpty() ? "Grok" : settings.model) : "OpenRouter · نموذج مجاني");
                         scan.setVisibility(server ? View.VISIBLE : View.GONE);
                         sessionStatus("جاهز لإرسال سؤال.");
                         secret.getText().clear();
@@ -250,12 +267,34 @@ public final class MainActivity extends Activity {
         dialog.show();
     }
 
+    private void launchProject() {
+        if (settings == null || !settings.server) {
+            sessionStatus("اضبط اتصال خادم MokAiCoder لفتح مساعد المشروع على Grok.");
+            connectionDialog();
+            return;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(settings.base.resolve("project").toString())));
+        } catch (ActivityNotFoundException unavailable) {
+            sessionStatus("متصفح الهاتف غير متاح.");
+        }
+    }
+
+    private void openLocalModels(String command) {
+        startActivity(new Intent(this, ModelsActivity.class).putExtra(ModelsActivity.COMMAND, command));
+    }
+
     private void sendPrompt() {
+        String question = prompt.getText().toString().trim();
+        if (LocalModelCatalog.downloadCommand(question)) {
+            prompt.getText().clear();
+            openLocalModels(question);
+            return;
+        }
         if (settings == null) {
             connectionDialog();
             return;
         }
-        String question = prompt.getText().toString().trim();
         if (question.isEmpty()) {
             prompt.requestFocus();
             return;

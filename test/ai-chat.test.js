@@ -466,3 +466,188 @@ test('publishes the reviewed content on a new GitHub branch based on the approve
     /^https:\/\/github\.com\/example\/project\/compare\/main\.\.\.mokai%2Fedit-/,
   );
 });
+
+test('reviews a project in batches, previews coordinated changes, and publishes one commit', async (t) => {
+  const ref = 'a'.repeat(40);
+  const treeSha = 'b'.repeat(40);
+  const updated = 'c'.repeat(40);
+  const commit = 'd'.repeat(40);
+  const app = await appWithProviders(t, {
+    XAI_API_KEY: 'fixture-grok-project',
+    XAI_MODELS: 'grok-project',
+    GITHUB_OWNER: 'my-team',
+    GITHUB_REPO: 'sample',
+    MOKAI_GITHUB_WRITE_TOKEN: 'fixture-project-write',
+  });
+  const files = new Map([
+    ['src/a.ts', 'export const value = "before";\n'],
+    ['src/b.ts', 'export function read() { return "before"; }\n'],
+    ['docs/overview.md', 'project details\n'.repeat(2100)],
+    ['secrets/service.txt', 'secret credential from source'],
+  ]);
+  const tree = [...files].map(([path, content], index) => ({
+    path,
+    type: 'blob',
+    mode: '100644',
+    sha: 'file-' + index,
+    size: Buffer.byteLength(content),
+  }));
+  const readSegments = [];
+  let writes = 0;
+  let advanced = false;
+  const respond = (value) =>
+    modelStream([
+      {
+        choices: [
+          { delta: { content: JSON.stringify(value) }, finish_reason: 'stop' },
+        ],
+      },
+      '[DONE]',
+    ]);
+
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const address = new URL(url);
+    if (address.hostname === 'api.x.ai') {
+      const [{ content: system }, { content }] = JSON.parse(
+        options.body,
+      ).messages;
+      assert.doesNotMatch(content, /secret credential from source/);
+      const input = JSON.parse(content);
+      if (system.includes('افحص هذه الدفعة')) {
+        readSegments.push(...input.segments);
+        return respond({
+          notes: 'project notes',
+          candidates: input.segments
+            .filter(({ path }) => path.endsWith('.ts'))
+            .map(({ path }) => path),
+        });
+      }
+      if (system.includes('اجمع نتائج'))
+        return respond({ report: 'Full review' });
+      if (system.includes('اقترح تعديلات')) {
+        assert.deepEqual(
+          input.selected.map(({ path }) => path),
+          ['src/a.ts', 'src/b.ts'],
+        );
+        return respond({
+          summary: 'Two coordinated edits',
+          edits: ['src/a.ts', 'src/b.ts'].map((path) => ({
+            kind: 'replace',
+            path,
+            replacements: [{ before: '"before"', after: '"after"' }],
+          })),
+        });
+      }
+      if (system.includes('مرحلة مستقلة'))
+        return respond({ report: 'Reviewed both edits' });
+      assert.fail('unexpected model stage');
+    }
+    const path = decodeURIComponent(address.pathname);
+    if (options?.method === 'POST') {
+      writes++;
+      const body = JSON.parse(options.body);
+      if (path.endsWith('/git/trees')) {
+        assert.equal(body.base_tree, treeSha);
+        assert.deepEqual(
+          body.tree.map(({ path }) => path),
+          ['src/a.ts', 'src/b.ts'],
+        );
+        assert.equal(
+          body.tree.every(({ content }) => content.includes('"after"')),
+          true,
+        );
+        return Response.json({ sha: updated });
+      }
+      if (path.endsWith('/git/commits')) {
+        assert.deepEqual(body.parents, [ref]);
+        assert.equal(body.tree, updated);
+        return Response.json({ sha: commit });
+      }
+      if (path.endsWith('/git/refs')) {
+        assert.equal(body.sha, commit);
+        return Response.json({ ref: body.ref });
+      }
+    }
+    if (path.endsWith('/git/ref/heads/main'))
+      return Response.json({ object: { sha: advanced ? updated : ref } });
+    if (path.includes('/git/commits/'))
+      return Response.json({
+        sha: advanced ? updated : ref,
+        tree: { sha: treeSha },
+      });
+    if (path.endsWith('/git/trees/' + treeSha))
+      return Response.json({ tree, truncated: false });
+    const item = tree.find(({ sha }) => path.endsWith('/' + sha));
+    if (item)
+      return Response.json({
+        content: Buffer.from(files.get(item.path)).toString('base64'),
+        encoding: 'base64',
+      });
+    assert.fail('Unexpected request ' + path);
+  });
+
+  const base = '/api/ai/project-assistant';
+  const request = {
+    model: 'grok-project',
+    action: 'edit',
+    task: 'Update both values',
+    allowPaid: true,
+    shareCloud: true,
+  };
+  assert.equal(
+    (await app.inject({ method: 'POST', url: base + '/run', payload: request }))
+      .statusCode,
+    401,
+  );
+  assert.equal(
+    (
+      await app.inject({
+        method: 'POST',
+        url: base + '/run',
+        headers,
+        payload: { ...request, shareCloud: false },
+      })
+    ).statusCode,
+    400,
+  );
+  const reviewed = await app.inject({
+    method: 'POST',
+    url: base + '/run',
+    headers,
+    payload: request,
+  });
+  assert.equal(reviewed.statusCode, 200);
+  const event = reviewed.body.match(/event: result\ndata: ([^\n]+)/);
+  assert.ok(event, reviewed.body);
+  const result = JSON.parse(event[1]);
+  assert.equal(result.coverage.reviewed, 3);
+  assert.ok(result.coverage.batches > 1);
+  assert.equal(result.changes.length, 2);
+  assert.equal(result.verification.review, 'Reviewed both edits');
+  assert.equal(
+    readSegments
+      .filter(({ path }) => path === 'docs/overview.md')
+      .map(({ content }) => content)
+      .join(''),
+    files.get('docs/overview.md'),
+  );
+  assert.equal(writes, 0);
+
+  const published = await app.inject({
+    method: 'POST',
+    url: base + '/publish',
+    headers,
+    payload: { id: result.id },
+  });
+  assert.equal(published.statusCode, 200, published.body);
+  assert.equal(writes, 3);
+  advanced = true;
+  const stale = await app.inject({
+    method: 'POST',
+    url: base + '/publish',
+    headers,
+    payload: { id: result.id },
+  });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(writes, 3);
+});
