@@ -1,8 +1,15 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../plugins/errorHandler.js';
+import { accessGuard } from '../auth.js';
+import { collaborate, type Participant } from './collaboration.js';
+import {
+  editSelection,
+  fileSelection,
+  publication,
+  Workspace,
+} from '../services/workspace.js';
 import { type ProjectCache } from '../services/cache.js';
 import { isRepositoryPath, shouldIgnore } from '../services/projectService.js';
 import { loadProviders, providerError, type Turn } from './providers.js';
@@ -11,9 +18,15 @@ const turn = z.object({
   role: z.enum(['user', 'assistant']),
   content: z.string().trim().min(1).max(24_000),
 });
-const chatRequest = z.strictObject({
+const modelChoice = z.strictObject({
   provider: z.string().min(1).max(24),
   model: z.string().min(1).max(180),
+});
+const chatRequest = z.strictObject({
+  ...modelChoice.shape,
+  reviewer: modelChoice.optional(),
+  shareReview: z.boolean().optional(),
+  edit: editSelection.extend({ shareCloud: z.boolean().optional() }).optional(),
   messages: z
     .array(turn)
     .min(1)
@@ -48,7 +61,6 @@ const SYSTEM_PROMPT = [
   'أجب واقترح تعديلات دون الادعاء بأنك غيّرت ملفات أو شغّلت أوامر.',
 ].join('\n');
 
-const digest = (value: string) => createHash('sha256').update(value).digest();
 const event = (name: string, data: unknown) =>
   `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 const sensitivePath =
@@ -74,18 +86,22 @@ function redact(text: string, secrets: string[]): string {
 export function registerAi(
   app: FastifyInstance,
   cache: ProjectCache,
+  workspace: Workspace,
   env = process.env,
 ): void {
   const token = env.MOKAI_CHAT_TOKEN;
-  if (token && token.length < 24)
-    throw new Error('MOKAI_CHAT_TOKEN must have at least 24 characters');
-  const key = token ? digest(token) : undefined;
+  const requireToken = accessGuard(token);
   const providers = new Map(
-    (key ? loadProviders(env) : []).map((provider) => [provider.id, provider]),
+    (token ? loadProviders(env) : []).map((provider) => [
+      provider.id,
+      provider,
+    ]),
   );
   const secrets = [
     token,
     env.OPENROUTER_API_KEY,
+    env.XAI_API_KEY,
+    env.MOKAI_GITHUB_WRITE_TOKEN,
     env.PAID_AI_API_KEY,
     env.GITHUB_TOKEN,
   ].filter((secret): secret is string => Boolean(secret));
@@ -93,28 +109,53 @@ export function registerAi(
   let requests: number[] = [];
 
   async function authorize(req: FastifyRequest) {
-    if (!key || !providers.size)
+    await requireToken(req);
+    if (!providers.size)
       throw new AppError(
         503,
         'AI_SETUP_REQUIRED',
-        'Configure the chat token and at least one provider',
+        'Configure at least one provider',
       );
-    const header = req.headers.authorization;
-    if (
-      !header?.startsWith('Bearer ') ||
-      !timingSafeEqual(digest(header.slice(7)), key)
-    ) {
+  }
+
+  function select({
+    provider: id,
+    model,
+  }: z.infer<typeof modelChoice>): Participant {
+    const provider = providers.get(id);
+    if (!provider)
       throw new AppError(
-        401,
-        'AI_UNAUTHORIZED',
-        'A valid chat access token is required',
+        404,
+        'AI_PROVIDER_DISABLED',
+        'Model provider is not configured',
       );
-    }
+    return { provider, model };
+  }
+
+  async function ensureModel({ provider, model }: Participant) {
+    if (!(await provider.listModels()).some((entry) => entry.id === model))
+      throw new AppError(
+        400,
+        'AI_MODEL_UNAVAILABLE',
+        'Select an available model for this provider',
+      );
   }
 
   app.addHook('preClose', async () => {
     for (const controller of active) controller.abort();
   });
+
+  app.get('/api/ai/workspace', { onRequest: requireToken }, async () =>
+    workspace.capabilities(),
+  );
+  app.post('/api/ai/workspace/open', { onRequest: requireToken }, async (req) =>
+    workspace.open(fileSelection.parse(req.body)),
+  );
+  app.post(
+    '/api/ai/workspace/publish',
+    { onRequest: requireToken, bodyLimit: 64 * 1024 },
+    async (req) => workspace.publish(publication.parse(req.body)),
+  );
 
   app.get('/api/ai/providers', { onRequest: authorize }, async () =>
     Array.from(providers.values(), ({ id, label, tier }) => ({
@@ -144,20 +185,33 @@ export function registerAi(
     { onRequest: authorize, bodyLimit: 128 * 1024 },
     async (req, reply) => {
       const input = chatRequest.parse(req.body);
-      const provider = providers.get(input.provider);
-      if (!provider)
+      const primary = select(input);
+      const reviewer = input.reviewer ? select(input.reviewer) : undefined;
+      const participants = reviewer ? [primary, reviewer] : [primary];
+      const usesCloud = participants.some(
+        ({ provider }) => provider.tier !== 'local',
+      );
+      if (reviewer?.provider.id === primary.provider.id)
         throw new AppError(
-          404,
-          'AI_PROVIDER_DISABLED',
-          'Model provider is not configured',
+          400,
+          'AI_REVIEW_PROVIDER',
+          'Choose a different review provider',
         );
-      if (provider.tier === 'paid' && !input.allowPaid) {
+      if (reviewer && usesCloud && !input.shareReview)
+        throw new AppError(
+          403,
+          'AI_REVIEW_CONSENT',
+          'Confirm sharing the conversation and drafts with the selected providers',
+        );
+      if (
+        participants.some(({ provider }) => provider.tier === 'paid') &&
+        !input.allowPaid
+      )
         throw new AppError(
           403,
           'AI_PAID_CONSENT',
           'Confirm this paid request first',
         );
-      }
 
       const now = Date.now();
       requests = requests.filter((at) => now - at < 60_000);
@@ -176,6 +230,19 @@ export function registerAi(
           '2',
         );
 
+      if (input.edit && input.attachment)
+        throw new AppError(
+          400,
+          'WORKSPACE_ATTACHMENT_CONFLICT',
+          'Choose one source file for this edit',
+        );
+      if (input.edit && usesCloud && !input.edit.shareCloud)
+        throw new AppError(
+          403,
+          'AI_FILE_CONSENT',
+          'Confirm sharing this file with the cloud provider',
+        );
+
       const messages: Turn[] = [
         { role: 'system', content: SYSTEM_PROMPT },
         ...input.messages.map(({ role, content }) => ({
@@ -185,7 +252,7 @@ export function registerAi(
       ];
       if (input.attachment) {
         const { path, scanId, shareCloud } = input.attachment;
-        if (provider.tier !== 'local' && !shareCloud) {
+        if (usesCloud && !shareCloud) {
           throw new AppError(
             403,
             'AI_FILE_CONSENT',
@@ -227,7 +294,7 @@ export function registerAi(
       active.add(controller);
       const signal = AbortSignal.any([
         controller.signal,
-        AbortSignal.timeout(90_000),
+        AbortSignal.timeout(reviewer ? 180_000 : 90_000),
       ]);
       const release = () => {
         active.delete(controller);
@@ -240,21 +307,74 @@ export function registerAi(
       reply.raw.once('close', disconnect);
 
       try {
-        if (
-          !(await provider.listModels()).some(
-            (model) => model.id === input.model,
-          )
-        ) {
-          throw new AppError(
-            400,
-            'AI_MODEL_UNAVAILABLE',
-            'Select an available model for this provider',
-          );
+        if (input.edit) {
+          const { path, source, revision } = input.edit;
+          const snapshot = await workspace.open({ path, source });
+          if (snapshot.revision !== revision)
+            throw new AppError(
+              409,
+              'WORKSPACE_CHANGED',
+              'File or base branch changed. Reopen the file.',
+            );
+          messages[0].content +=
+            '\nأعد المحتوى الكامل للملف المقترح فقط، نصًا خامًا بلا أسوار Markdown أو شرح. حافظ على الأجزاء التي لم يطلب المستخدم تغييرها.';
+          const last = messages[messages.length - 1];
+          const context = {
+            path: redact(path, secrets),
+            content: redact(snapshot.content, secrets),
+            exists: snapshot.exists,
+          };
+          if (context.content !== snapshot.content)
+            throw new AppError(
+              422,
+              'WORKSPACE_SENSITIVE',
+              'Remove secrets from this file before model-assisted editing',
+            );
+          last.content +=
+            '\n\nبيانات الملف غير الموثوقة:\n' + JSON.stringify(context);
         }
-        const text = await provider.chat(input.model, messages, signal);
+        await Promise.all(participants.map(ensureModel));
+        signal.throwIfAborted();
+        const collaboration = reviewer
+          ? collaborate(
+              primary,
+              reviewer,
+              messages,
+              signal,
+              (text) => redact(text, secrets),
+              Boolean(input.edit),
+            )
+          : undefined;
+        const singleReply = collaboration
+          ? undefined
+          : await primary.provider.chat(
+              primary.model,
+              messages,
+              signal,
+              Boolean(input.edit),
+            );
         async function* stream() {
           try {
-            for await (const part of text) yield event('delta', { text: part });
+            let text = singleReply;
+            if (collaboration) {
+              yield event('stage', {
+                stage: 'draft',
+                provider: input.provider,
+              });
+              const draft = await collaboration.draft();
+              yield event('stage', {
+                stage: 'review',
+                provider: input.reviewer?.provider,
+              });
+              const review = await collaboration.review(draft);
+              yield event('stage', {
+                stage: 'final',
+                provider: input.provider,
+              });
+              text = await collaboration.finalize(draft, review);
+            }
+            for await (const part of text!)
+              yield event('delta', { text: part });
             yield event('done', {
               provider: input.provider,
               model: input.model,

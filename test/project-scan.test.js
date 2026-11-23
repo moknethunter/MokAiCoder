@@ -6,28 +6,40 @@ process.env.GITHUB_TOKEN = 'fixture-token';
 process.env.GITHUB_OWNER = 'fixture-owner';
 process.env.GITHUB_REPO = 'fixture-repo';
 process.env.GITHUB_BRANCH = 'fixture-main';
+process.env.MOKAI_CHAT_TOKEN = 'fixture-project-access-token';
+
+function scanRequest(app, input) {
+  const options = typeof input === 'string' ? { url: input } : input;
+  return app.inject({
+    ...options,
+    headers: {
+      ...options.headers,
+      authorization: 'Bearer ' + process.env.MOKAI_CHAT_TOKEN,
+    },
+  });
+}
 
 test('serves the existing Arabic web app and health endpoint', async (t) => {
   const app = await createApp({ logger: false });
   t.after(() => app.close());
 
-  const health = await app.inject('/health');
+  const health = await scanRequest(app, '/health');
   assert.equal(health.statusCode, 200);
   assert.equal(health.json().status, 'ok');
   assert.equal(health.json().version, '1.2.0');
 
-  const homepage = await app.inject('/');
+  const homepage = await scanRequest(app, '/');
   assert.equal(homepage.statusCode, 200);
   assert.match(homepage.body, /lang="ar" dir="rtl"/);
 
-  const script = await app.inject('/app.js');
+  const script = await scanRequest(app, '/app.js');
   assert.equal(script.statusCode, 200);
   assert.match(script.body, /async function scanProject/);
-  const stylesheet = await app.inject('/style.css');
+  const stylesheet = await scanRequest(app, '/style.css');
   assert.equal(stylesheet.statusCode, 200);
   assert.match(stylesheet.headers['content-type'], /^text\/css/);
 
-  const missingApi = await app.inject('/api/missing');
+  const missingApi = await scanRequest(app, '/api/missing');
   assert.equal(missingApi.statusCode, 404);
   assert.deepEqual(missingApi.json(), {
     error: 'Not found',
@@ -119,11 +131,11 @@ test('scans GitHub files and preserves the project API response and cache', asyn
   const app = await createApp({ logger: false });
   t.after(() => app.close());
 
-  const treeBeforeScan = await app.inject('/api/project/tree');
+  const treeBeforeScan = await scanRequest(app, '/api/project/tree');
   assert.equal(treeBeforeScan.statusCode, 409);
-  assert.equal((await app.inject('/api/project/graph')).statusCode, 409);
+  assert.equal((await scanRequest(app, '/api/project/graph')).statusCode, 409);
 
-  const scan = await app.inject({
+  const scan = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
     payload: { branch: 'release' },
@@ -156,7 +168,7 @@ test('scans GitHub files and preserves the project API response and cache', asyn
     files: Object.keys(sourceFiles),
   });
 
-  const defaultScan = await app.inject({
+  const defaultScan = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
   });
@@ -169,14 +181,14 @@ test('scans GitHub files and preserves the project API response and cache', asyn
     ['release', 'fixture-main'],
   );
   assert.equal(requests.length, 10);
-  const staleFile = await app.inject({
+  const staleFile = await scanRequest(app, {
     url: '/api/project/file',
     query: { path: 'src/helper.ts', scanId: scan.headers['x-scan-id'] },
   });
   assert.equal(staleFile.statusCode, 409);
   assert.equal(staleFile.json().code, 'SCAN_CHANGED');
 
-  const failedScan = await app.inject({
+  const failedScan = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
     payload: { branch: 'unknown' },
@@ -184,7 +196,7 @@ test('scans GitHub files and preserves the project API response and cache', asyn
   assert.equal(failedScan.statusCode, 404);
   assert.equal(failedScan.json().code, 'GITHUB_NOT_FOUND');
 
-  const partialScan = await app.inject({
+  const partialScan = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
     payload: { branch: 'bad-blob' },
@@ -193,19 +205,25 @@ test('scans GitHub files and preserves the project API response and cache', asyn
   assert.equal(partialScan.json().code, 'GITHUB_UNAVAILABLE');
   assert.doesNotMatch(partialScan.body, /Sensitive upstream details/);
 
-  const cachedTree = await app.inject('/api/project/tree');
+  const cachedTree = await scanRequest(app, '/api/project/tree');
   assert.equal(cachedTree.statusCode, 200);
   assert.deepEqual(
     cachedTree.json(),
     Array.from(blobs.values(), ({ path, size }) => ({ path, size })),
   );
-  assert.deepEqual((await app.inject('/api/project/graph')).json(), graph);
+  assert.deepEqual(
+    (await scanRequest(app, '/api/project/graph')).json(),
+    graph,
+  );
 
-  const cachedFile = await app.inject('/api/project/file?path=src%2Fhelper.ts');
+  const cachedFile = await scanRequest(
+    app,
+    '/api/project/file?path=src%2Fhelper.ts',
+  );
   assert.equal(cachedFile.statusCode, 200);
   assert.deepEqual(cachedFile.json(), blobs.get('blob-1'));
 
-  const blocked = await app.inject('/api/project/file?path=.env');
+  const blocked = await scanRequest(app, '/api/project/file?path=.env');
   assert.equal(blocked.statusCode, 404);
 });
 
@@ -217,7 +235,7 @@ test('rejects malformed requests without fetching GitHub', async (t) => {
   t.after(() => app.close());
 
   for (const branch of ['', 5, '../main', 'has spaces', 'a'.repeat(101)]) {
-    const invalid = await app.inject({
+    const invalid = await scanRequest(app, {
       method: 'POST',
       url: '/api/project/scan',
       payload: { branch },
@@ -226,7 +244,7 @@ test('rejects malformed requests without fetching GitHub', async (t) => {
     assert.equal(invalid.json().code, 'INVALID_REQUEST');
   }
 
-  const invalidJson = await app.inject({
+  const invalidJson = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
     headers: { 'content-type': 'application/json' },
@@ -236,14 +254,14 @@ test('rejects malformed requests without fetching GitHub', async (t) => {
   assert.equal(invalidJson.json().code, 'INVALID_REQUEST');
 
   for (const path of ['', '/src/a.ts', 'src/../a.ts', 'src//a.ts']) {
-    const invalid = await app.inject({
+    const invalid = await scanRequest(app, {
       url: '/api/project/file',
       query: { path },
     });
     assert.equal(invalid.statusCode, 400);
     assert.equal(invalid.json().code, 'INVALID_REQUEST');
   }
-  assert.equal((await app.inject('/api/project/file')).statusCode, 400);
+  assert.equal((await scanRequest(app, '/api/project/file')).statusCode, 400);
   assert.equal(fetch.mock.callCount(), 0);
 });
 
@@ -252,7 +270,7 @@ test('only permits configured cross-origin requests', async (t) => {
   delete process.env.CORS_ORIGIN;
   const defaultApp = await createApp({ logger: false });
   t.after(() => defaultApp.close());
-  const denied = await defaultApp.inject({
+  const denied = await scanRequest(defaultApp, {
     url: '/health',
     headers: { origin: 'https://another.example' },
   });
@@ -261,7 +279,7 @@ test('only permits configured cross-origin requests', async (t) => {
   process.env.CORS_ORIGIN = 'https://scanner.example';
   const configured = await createApp({ logger: false });
   t.after(() => configured.close());
-  const ok = await configured.inject({
+  const ok = await scanRequest(configured, {
     url: '/health',
     headers: { origin: 'https://scanner.example' },
   });
@@ -269,7 +287,7 @@ test('only permits configured cross-origin requests', async (t) => {
     ok.headers['access-control-allow-origin'],
     'https://scanner.example',
   );
-  const foreign = await configured.inject({
+  const foreign = await scanRequest(configured, {
     url: '/health',
     headers: { origin: 'https://another.example' },
   });
@@ -286,10 +304,13 @@ test('deduplicates simultaneous scans and publishes a valid empty snapshot', asy
   const app = await createApp({ logger: false });
   t.after(() => app.close());
 
-  const initial = app.inject({ method: 'POST', url: '/api/project/scan' });
+  const initial = scanRequest(app, {
+    method: 'POST',
+    url: '/api/project/scan',
+  });
   try {
     await started.promise;
-    const concurrent = await app.inject({
+    const concurrent = await scanRequest(app, {
       method: 'POST',
       url: '/api/project/scan',
     });
@@ -302,10 +323,10 @@ test('deduplicates simultaneous scans and publishes a valid empty snapshot', asy
   assert.equal(scanned.statusCode, 200);
   assert.equal(scanned.json().fileCount, 0);
 
-  const tree = await app.inject('/api/project/tree');
+  const tree = await scanRequest(app, '/api/project/tree');
   assert.equal(tree.statusCode, 200);
   assert.deepEqual(tree.json(), []);
-  assert.equal((await app.inject('/api/project/graph')).statusCode, 200);
+  assert.equal((await scanRequest(app, '/api/project/graph')).statusCode, 200);
 });
 
 test('returns rate-limit timing and rejects truncated GitHub trees', async (t) => {
@@ -324,7 +345,7 @@ test('returns rate-limit timing and rejects truncated GitHub trees', async (t) =
   const app = await createApp({ logger: false });
   t.after(() => app.close());
 
-  const throttled = await app.inject({
+  const throttled = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
     payload: { branch: 'limited' },
@@ -333,11 +354,11 @@ test('returns rate-limit timing and rejects truncated GitHub trees', async (t) =
   assert.equal(throttled.json().code, 'GITHUB_RATE_LIMIT');
   assert.equal(throttled.headers['retry-after'], '30');
 
-  const truncated = await app.inject({
+  const truncated = await scanRequest(app, {
     method: 'POST',
     url: '/api/project/scan',
   });
   assert.equal(truncated.statusCode, 422);
   assert.equal(truncated.json().code, 'PROJECT_TOO_LARGE');
-  assert.equal((await app.inject('/api/project/tree')).statusCode, 409);
+  assert.equal((await scanRequest(app, '/api/project/tree')).statusCode, 409);
 });

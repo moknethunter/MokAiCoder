@@ -15,6 +15,7 @@ export interface ModelProvider {
     model: string,
     messages: Turn[],
     signal: AbortSignal,
+    requireComplete?: boolean,
   ): Promise<AsyncIterable<string>>;
 }
 
@@ -70,6 +71,13 @@ async function verifyResponse(response: Response) {
       502,
       'AI_PROVIDER_AUTH',
       'Model provider rejected the server credentials',
+    );
+  }
+  if (response.status === 402) {
+    throw new AppError(
+      502,
+      'AI_PROVIDER_CREDITS',
+      'Model provider requires credits',
     );
   }
   throw new AppError(
@@ -143,6 +151,7 @@ class CompatibleProvider implements ModelProvider {
     model: string,
     messages: Turn[],
     signal: AbortSignal,
+    requireComplete = false,
   ): Promise<AsyncIterable<string>> {
     try {
       const response = await fetch(
@@ -176,7 +185,7 @@ class CompatibleProvider implements ModelProvider {
           'Model provider returned an unsupported response',
         );
       }
-      return this.readReply(response.body, signal);
+      return this.readReply(response.body, signal, requireComplete);
     } catch (error) {
       throw providerError(signal.aborted ? signal.reason : error);
     }
@@ -185,6 +194,7 @@ class CompatibleProvider implements ModelProvider {
   private async *readReply(
     body: ReadableStream<Uint8Array>,
     signal: AbortSignal,
+    requireComplete: boolean,
   ) {
     let received = 0;
     let finished = false;
@@ -221,6 +231,16 @@ class CompatibleProvider implements ModelProvider {
             );
           yield text;
         }
+        if (
+          requireComplete &&
+          choice?.finish_reason &&
+          choice.finish_reason !== 'stop'
+        )
+          throw new AppError(
+            502,
+            'AI_INCOMPLETE',
+            'Model did not return the entire file',
+          );
         if (choice?.finish_reason) finished = true;
       }
       if (!finished || !received)
@@ -301,6 +321,18 @@ export function loadProviders(env: NodeJS.ProcessEnv): ModelProvider[] {
         label: 'Ollama',
         tier: 'local',
         base: endpoint(env.OLLAMA_BASE_URL, true),
+      }),
+    );
+  }
+  if (env.XAI_API_KEY) {
+    providers.push(
+      new CompatibleProvider({
+        id: 'grok',
+        label: 'Grok (xAI)',
+        tier: 'paid',
+        base: new URL('https://api.x.ai/v1/'),
+        key: env.XAI_API_KEY,
+        models: env.XAI_MODELS ? configuredModels(env.XAI_MODELS) : undefined,
       }),
     );
   }

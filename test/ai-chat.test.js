@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp } from '../src/app.ts';
 import { loadProviders } from '../src/ai/providers.ts';
 
@@ -22,6 +25,11 @@ async function appWithProviders(t, env = {}) {
     OPENROUTER_API_KEY: routerKey,
     OPENROUTER_FREE_MODELS: undefined,
     OLLAMA_BASE_URL: undefined,
+    XAI_API_KEY: undefined,
+    XAI_MODELS: undefined,
+    MOKAI_WORKSPACE_ROOT: undefined,
+    MOKAI_GITHUB_WRITE_TOKEN: undefined,
+    GITHUB_BRANCH: undefined,
     PAID_AI_API_KEY: undefined,
     PAID_AI_BASE_URL: undefined,
     PAID_AI_MODELS: undefined,
@@ -252,4 +260,209 @@ test('preserves 429 timing, suppresses provider error bodies, and detects incomp
   assert.match(truncated.body, /event: error\ndata: {"code":"AI_INCOMPLETE"}/);
   assert.doesNotMatch(truncated.body, /event: done/);
   assert.equal(upstream.mock.callCount(), 2);
+});
+
+test('requires cloud and cost consent, then sends the draft, review and final in order', async (t) => {
+  const app = await appWithProviders(t, {
+    XAI_API_KEY: 'fixture-xai-secret',
+    XAI_MODELS: 'fixture-grok',
+  });
+  const calls = [];
+  const fetcher = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ host: url.hostname, path: url.pathname, body });
+    if (url.hostname === 'api.x.ai')
+      assert.equal(options.headers.Authorization, 'Bearer fixture-xai-secret');
+    const text = ['مسودة fixture-xai-secret', 'مراجعة', 'رد نهائي'][
+      calls.length - 1
+    ];
+    return modelStream([
+      { choices: [{ delta: { content: text }, finish_reason: 'stop' }] },
+    ]);
+  });
+  const collaboration = {
+    ...baseRequest,
+    reviewer: { provider: 'grok', model: 'fixture-grok' },
+  };
+  const status = await app.inject({ url: '/api/ai/providers', headers });
+  assert.deepEqual(status.json().at(-1), {
+    id: 'grok',
+    label: 'Grok (xAI)',
+    tier: 'paid',
+  });
+  assert.doesNotMatch(status.body, /fixture-xai-secret/);
+  assert.equal(
+    (await authRequest(app, collaboration)).json().code,
+    'AI_REVIEW_CONSENT',
+  );
+  assert.equal(
+    (await authRequest(app, { ...collaboration, shareReview: true })).json()
+      .code,
+    'AI_PAID_CONSENT',
+  );
+  const duplicate = {
+    ...collaboration,
+    reviewer: { provider: 'openrouter', model: 'openrouter/free' },
+  };
+  assert.equal(
+    (await authRequest(app, duplicate)).json().code,
+    'AI_REVIEW_PROVIDER',
+  );
+  assert.equal(fetcher.mock.callCount(), 0);
+
+  const reply = await authRequest(app, {
+    ...collaboration,
+    shareReview: true,
+    allowPaid: true,
+  });
+  assert.deepEqual(
+    calls.map(({ host }) => host),
+    ['openrouter.ai', 'api.x.ai', 'openrouter.ai'],
+  );
+  assert.equal(calls[1].path, '/v1/chat/completions');
+  assert.match(calls[1].body.messages.at(-1).content, /مسودة \[REDACTED\]/);
+  assert.doesNotMatch(
+    calls[1].body.messages.at(-1).content,
+    /fixture-xai-secret/,
+  );
+  assert.match(calls[2].body.messages.at(-1).content, /"review":"مراجعة"/);
+  assert.match(
+    reply.body,
+    /"stage":"draft"[\s\S]*"stage":"review"[\s\S]*"stage":"final"/,
+  );
+  assert.match(reply.body, /"text":"رد نهائي"/);
+  assert.match(reply.body, /event: done/);
+  assert.doesNotMatch(reply.body, /fixture-xai-secret/);
+});
+
+test('keeps a workspace proposal read-only until an explicit save and rejects stale edits', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mokai-workspace-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'sample.js');
+  await writeFile(path, 'export const value = 1;\n');
+  await symlink(path, join(directory, 'link.js'));
+  const app = await appWithProviders(t, { MOKAI_WORKSPACE_ROOT: directory });
+  const workspace = (action, payload, authorization = headers) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/ai/workspace/' + action,
+      headers: authorization,
+      payload,
+    });
+  const target = { source: 'local', path: 'sample.js' };
+  assert.equal((await workspace('open', target, {})).statusCode, 401);
+  assert.equal(
+    (await workspace('open', { ...target, path: 'link.js' })).statusCode,
+    404,
+  );
+  assert.equal(
+    (await workspace('open', { ...target, path: '../sample.js' })).statusCode,
+    400,
+  );
+  const snapshot = (await workspace('open', target)).json();
+  const edit = { ...target, revision: snapshot.revision };
+  assert.equal(
+    (await authRequest(app, { ...baseRequest, edit })).json().code,
+    'AI_FILE_CONSENT',
+  );
+
+  const next = 'export const value = 2;\n';
+  let attempt = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const { messages } = JSON.parse(options.body);
+    assert.match(messages.at(-1).content, /export const value = 1/);
+    const finish_reason = ++attempt === 1 ? 'length' : 'stop';
+    return modelStream([
+      { choices: [{ delta: { content: next }, finish_reason }] },
+    ]);
+  });
+  const input = { ...baseRequest, edit: { ...edit, shareCloud: true } };
+  const incomplete = await authRequest(app, input);
+  assert.match(incomplete.body, /AI_INCOMPLETE/);
+  assert.doesNotMatch(incomplete.body, /event: done/);
+  const proposal = await authRequest(app, input);
+  assert.match(proposal.body, /event: done/);
+  assert.equal(await readFile(path, 'utf8'), snapshot.content);
+
+  const applied = await workspace('publish', { ...edit, content: next });
+  assert.equal(applied.statusCode, 200);
+  assert.equal(await readFile(path, 'utf8'), next);
+  assert.equal(
+    (await workspace('publish', { ...edit, content: 'stale' })).statusCode,
+    409,
+  );
+  assert.equal(await readFile(path, 'utf8'), next);
+});
+
+test('publishes the reviewed content on a new GitHub branch based on the approved revision', async (t) => {
+  const app = await appWithProviders(t, {
+    GITHUB_OWNER: 'example',
+    GITHUB_REPO: 'project',
+    GITHUB_BRANCH: 'main',
+    GITHUB_TOKEN: 'fixture-github-read',
+    MOKAI_GITHUB_WRITE_TOKEN: 'fixture-github-write',
+  });
+  const original = 'a'.repeat(40);
+  const tree = 'b'.repeat(40);
+  const nextTree = 'c'.repeat(40);
+  const commit = 'd'.repeat(40);
+  const upstream = t.mock.method(
+    globalThis,
+    'fetch',
+    async (input, options) => {
+      const suffix = decodeURIComponent(
+        new URL(input).pathname.split('/git/')[1],
+      );
+      const body = options.body ? JSON.parse(options.body) : undefined;
+      if (options.method === 'POST')
+        assert.equal(
+          options.headers.authorization,
+          'token fixture-github-write',
+        );
+      if (suffix === 'ref/heads/main')
+        return Response.json({ object: { sha: original } });
+      if (suffix === 'commits/' + original)
+        return Response.json({ sha: original, tree: { sha: tree } });
+      if (suffix === 'trees/' + tree) return Response.json({ tree: [] });
+      if (suffix === 'trees') {
+        assert.equal(body.base_tree, tree);
+        assert.deepEqual(body.tree, [
+          {
+            path: 'sample.js',
+            mode: '100644',
+            type: 'blob',
+            content: 'export {};\n',
+          },
+        ]);
+        return Response.json({ sha: nextTree });
+      }
+      if (suffix === 'commits') {
+        assert.deepEqual(body.parents, [original]);
+        assert.equal(body.tree, nextTree);
+        return Response.json({ sha: commit });
+      }
+      assert.equal(suffix, 'refs');
+      assert.match(body.ref, /^refs\/heads\/mokai\/edit-[0-9a-f]{20}$/);
+      assert.equal(body.sha, commit);
+      return Response.json({ ref: body.ref });
+    },
+  );
+  assert.equal((await app.inject('/api/project/tree')).statusCode, 401);
+  const result = await app.inject({
+    method: 'POST',
+    url: '/api/ai/workspace/publish',
+    headers,
+    payload: {
+      path: 'sample.js',
+      source: 'github',
+      revision: original,
+      content: 'export {};\n',
+    },
+  });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.equal(upstream.mock.callCount(), 6);
+  assert.match(
+    result.json().compareUrl,
+    /^https:\/\/github\.com\/example\/project\/compare\/main\.\.\.mokai%2Fedit-/,
+  );
 });

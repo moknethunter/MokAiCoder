@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { registerAi } from './ai/routes.js';
+import { accessGuard } from './auth.js';
+import { Workspace } from './services/workspace.js';
 import { AppError, registerErrorHandler } from './plugins/errorHandler.js';
 import { isRepositoryPath, ProjectService } from './services/projectService.js';
 import { DependencyService } from './services/dependencyService.js';
@@ -78,10 +80,13 @@ export async function createApp({ logger = true } = {}) {
     version,
   }));
 
-  registerAi(app, cache);
+  registerAi(app, cache, new Workspace(process.env));
+  const projectAccess = process.env.GITHUB_TOKEN
+    ? { onRequest: accessGuard(process.env.MOKAI_CHAT_TOKEN) }
+    : {};
   app.get('/chat', async (_req, reply) => reply.sendFile('chat.html'));
 
-  app.post('/api/project/scan', async (req, reply) => {
+  app.post('/api/project/scan', projectAccess, async (req, reply) => {
     const { branch } = scanSchema.parse(req.body === undefined ? {} : req.body);
     if (!process.env.GITHUB_OWNER || !process.env.GITHUB_REPO) {
       throw new AppError(
@@ -119,7 +124,7 @@ export async function createApp({ logger = true } = {}) {
     }
   });
 
-  app.get('/api/project/tree', async (_req, reply) => {
+  app.get('/api/project/tree', projectAccess, async (_req, reply) => {
     const snapshot = cache.current;
     if (!snapshot) throw new AppError(409, 'SCAN_REQUIRED', 'Run scan first');
     reply.header('X-Scan-Id', snapshot.id);
@@ -129,13 +134,13 @@ export async function createApp({ logger = true } = {}) {
     }));
   });
 
-  app.get('/api/project/graph', async () => {
+  app.get('/api/project/graph', projectAccess, async () => {
     const snapshot = cache.current;
     if (!snapshot) throw new AppError(409, 'SCAN_REQUIRED', 'Run scan first');
     return snapshot.graph;
   });
 
-  app.get('/api/project/file', async (req) => {
+  app.get('/api/project/file', projectAccess, async (req) => {
     const { path, scanId } = fileQuerySchema.parse(req.query);
     const snapshot = cache.current;
     if (scanId && snapshot?.id !== scanId) {

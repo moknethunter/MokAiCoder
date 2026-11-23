@@ -37,8 +37,9 @@ public final class MainActivity extends Activity {
     private static final int LINE = Color.rgb(216, 227, 219);
     private static final int HEADER = Color.rgb(20, 46, 36);
     private static final int PALE_GREEN = Color.rgb(229, 244, 234);
-    private static final String[] PROVIDERS = {"openrouter", "ollama", "paid"};
-    private static final String[] DEFAULT_MODELS = {"openrouter/free", "qwen2.5-coder:7b", ""};
+    private static final String[] PROVIDERS = {"openrouter", "ollama", "grok", "paid"};
+    private static final String[] PROVIDER_LABELS = {"OpenRouter", "Ollama", "Grok (xAI)", "مزوّد مدفوع"};
+    private static final String[] DEFAULT_MODELS = {"openrouter/free", "qwen2.5-coder:7b", "", ""};
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final List<Turn> history = new ArrayList<>();
@@ -141,13 +142,20 @@ public final class MainActivity extends Activity {
         fields.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         fields.setPadding(dp(20), dp(8), dp(20), dp(8));
         Spinner mode = picker(new String[]{"OpenRouter المجاني", "خادم MokAiCoder"});
-        mode.setSelection(settings != null && settings.server ? 1 : 0);
+        mode.setSelection(settings == null || settings.server ? 1 : 0);
         addField(fields, "طريقة الاتصال", mode);
         EditText address = field("https://", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         EditText secret = field("", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         secret.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         secret.setTextDirection(View.TEXT_DIRECTION_LTR);
-        Spinner provider = picker(new String[]{"OpenRouter", "Ollama", "مزوّد مدفوع"});
+        Spinner provider = picker(PROVIDER_LABELS);
+        String[] reviewLabels = new String[PROVIDER_LABELS.length + 1];
+        reviewLabels[0] = "دون مراجع";
+        System.arraycopy(PROVIDER_LABELS, 0, reviewLabels, 1, PROVIDER_LABELS.length);
+        Spinner reviewer = picker(reviewLabels);
+        EditText reviewModel = field("معرّف نموذج المراجعة", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        reviewModel.setTextDirection(View.TEXT_DIRECTION_LTR);
         EditText model = field("معرّف النموذج", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         model.setTextDirection(View.TEXT_DIRECTION_LTR);
         TextView secretLabel = label("", 14, INK, true);
@@ -155,6 +163,10 @@ public final class MainActivity extends Activity {
         addField(serverFields, "رابط خادم MokAiCoder", address);
         addField(serverFields, "المزوّد المهيّأ على الخادم", provider);
         addField(serverFields, "معرّف النموذج", model);
+        addField(serverFields, "مزوّد المراجعة", reviewer);
+        LinearLayout reviewFields = column();
+        addField(reviewFields, "معرّف نموذج المراجعة", reviewModel);
+        serverFields.addView(reviewFields);
         fields.addView(serverFields);
         fields.addView(secretLabel);
         fields.addView(secret, fieldSize());
@@ -163,6 +175,19 @@ public final class MainActivity extends Activity {
 
         int initialProvider = settings == null ? 0 : providerIndex(settings.provider);
         provider.setSelection(initialProvider);
+        int initialReviewer = settings == null || !settings.collaborates()
+                ? 0 : providerIndex(settings.reviewer) + 1;
+        reviewer.setSelection(initialReviewer);
+        if (initialReviewer != 0) reviewModel.setText(settings.reviewModel);
+        reviewFields.setVisibility(initialReviewer == 0 ? View.GONE : View.VISIBLE);
+        reviewer.setOnItemSelectedListener(new Selection() {
+            private int selection = initialReviewer;
+            @Override public void select(int position) {
+                reviewFields.setVisibility(position == 0 ? View.GONE : View.VISIBLE);
+                if (selection != position && position > 0) reviewModel.setText(DEFAULT_MODELS[position - 1]);
+                selection = position;
+            }
+        });
         model.setText(settings != null && settings.server ? settings.model : DEFAULT_MODELS[initialProvider]);
         if (settings != null && settings.server) address.setText(settings.base.toString());
         if (settings != null) secret.setText(settings.secret);
@@ -202,9 +227,12 @@ public final class MainActivity extends Activity {
                     try {
                         if (key.isEmpty()) throw new IllegalArgumentException("أدخل مفتاح API أو رمز الوصول.");
                         boolean server = mode.getSelectedItemPosition() == 1;
+                        int reviewIndex = reviewer.getSelectedItemPosition();
                         settings = server
                                 ? ChatClient.Settings.server(address.getText().toString(), key,
-                                PROVIDERS[provider.getSelectedItemPosition()], model.getText().toString())
+                                PROVIDERS[provider.getSelectedItemPosition()], model.getText().toString(),
+                                reviewIndex == 0 ? "" : PROVIDERS[reviewIndex - 1],
+                                reviewModel.getText().toString())
                                 : ChatClient.Settings.free(key);
                         history.clear();
                         transcript.removeAllViews();
@@ -233,10 +261,14 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        if (settings.paid()) {
+        if (settings.paid() || settings.collaborates()) {
+            String consent = settings.collaborates()
+                    ? "تُشارك المحادثة ومسودة الرد والمراجعة بين المزوّدات التي اخترتها."
+                    : "";
+            if (settings.paid()) consent += "\nقد يُخصم هذا الطلب من رصيد API لدى المزوّد.";
             new AlertDialog.Builder(this)
-                    .setTitle("طلب إلى مزوّد مدفوع")
-                    .setMessage("قد يُخصم هذا الطلب من رصيدك لدى المزوّد.")
+                    .setTitle("تأكيد إرسال الطلب")
+                    .setMessage(consent.trim())
                     .setNegativeButton("إلغاء", null)
                     .setPositiveButton("إرسال", (dialog, which) -> startChat(question))
                     .show();

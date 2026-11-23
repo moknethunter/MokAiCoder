@@ -23,20 +23,26 @@ final class ChatClient {
         final String secret;
         final String provider;
         final String model;
+        final String reviewer;
+        final String reviewModel;
 
-        private Settings(boolean server, URI base, String secret, String provider, String model) {
+        private Settings(boolean server, URI base, String secret, String provider, String model,
+                         String reviewer, String reviewModel) {
             this.server = server;
             this.base = base;
             this.secret = secret;
             this.provider = provider;
             this.model = model;
+            this.reviewer = reviewer;
+            this.reviewModel = reviewModel;
         }
 
         static Settings free(String secret) {
-            return new Settings(false, OPENROUTER, secret, "openrouter", "openrouter/free");
+            return new Settings(false, OPENROUTER, secret, "openrouter", "openrouter/free", "", "");
         }
 
-        static Settings server(String address, String secret, String provider, String model) {
+        static Settings server(String address, String secret, String provider, String model,
+                               String reviewer, String reviewModel) {
             URI parsed = URI.create(address.trim());
             if (!"https".equalsIgnoreCase(parsed.getScheme()) || parsed.getHost() == null
                     || parsed.getUserInfo() != null || parsed.getQuery() != null
@@ -46,13 +52,24 @@ final class ChatClient {
             if (model.trim().isEmpty()) {
                 throw new IllegalArgumentException("أدخل معرّف نموذج الخادم.");
             }
+            if (!reviewer.isEmpty() && (reviewer.equals(provider) || reviewModel.trim().isEmpty())) {
+                throw new IllegalArgumentException("اختر مزوّد مراجعة مختلفًا وأدخل معرّف نموذج المراجعة.");
+            }
             String base = parsed.toString();
             return new Settings(true, URI.create(base.endsWith("/") ? base : base + "/"),
-                    secret, provider, model.trim());
+                    secret, provider, model.trim(), reviewer, reviewModel.trim());
         }
 
         boolean paid() {
-            return server && "paid".equals(provider);
+            return server && (mayCharge(provider) || mayCharge(reviewer));
+        }
+
+        boolean collaborates() {
+            return server && !reviewer.isEmpty();
+        }
+
+        private boolean mayCharge(String id) {
+            return "paid".equals(id) || "grok".equals(id);
         }
     }
 
@@ -82,6 +99,11 @@ final class ChatClient {
                 request.put("provider", settings.provider);
                 request.put("messages", messages);
                 if (settings.paid()) request.put("allowPaid", true);
+                if (settings.collaborates()) {
+                    request.put("reviewer", new JSONObject().put("provider", settings.reviewer)
+                            .put("model", settings.reviewModel));
+                    request.put("shareReview", true);
+                }
             } else {
                 JSONArray prompt = new JSONArray();
                 prompt.put(new JSONObject().put("role", "system").put("content",
@@ -141,7 +163,7 @@ final class ChatClient {
                 if (cancelled) throw new IOException("أوقفت الطلب.");
                 active.setInstanceFollowRedirects(false);
                 active.setConnectTimeout(12_000);
-                active.setReadTimeout(95_000);
+                active.setReadTimeout(settings.collaborates() ? 185_000 : 95_000);
                 active.setRequestMethod("POST");
                 active.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 active.setRequestProperty("Accept", "api/project/scan".equals(path)
@@ -187,6 +209,9 @@ final class ChatClient {
                             JSONObject providerError = json.optJSONObject("error");
                             String code = providerError == null
                                     ? json.optString("code") : providerError.optString("code");
+                            if ("AI_PROVIDER_CREDITS".equals(code)) {
+                                throw new IOException("يتطلب المزوّد رصيد API لهذا الطلب.");
+                            }
                             if ("429".equals(code) || "AI_RATE_LIMIT".equals(code)) {
                                 throw new IOException("بلغت حد الاستخدام المجاني. حاول لاحقًا.");
                             }

@@ -1,5 +1,7 @@
 const form = document.getElementById('scan-form');
 const branch = document.getElementById('branch');
+const scanAccess = document.getElementById('scan-access');
+const scanToken = document.getElementById('scan-token');
 const scanButton = document.getElementById('scanBtn');
 const status = document.getElementById('status');
 const results = document.getElementById('results');
@@ -15,6 +17,9 @@ const code = document.getElementById('code');
 const number = new Intl.NumberFormat('ar');
 
 const errorLabels = {
+  AI_UNAUTHORIZED:
+    'أدخل رمز وصول MokAiCoder لحماية ملفات المستودع، ثم شغّل الفحص.',
+  AI_SETUP_REQUIRED: 'اضبط رمز وصول MokAiCoder على الخادم لفتح فحص المستودع.',
   GITHUB_SETUP_REQUIRED: 'اضبط اسم المالك والمستودع على الخادم قبل الفحص.',
   INVALID_REQUEST: 'تحقّق من قيمة الفرع أو مسار الملف.',
   SCAN_IN_PROGRESS: 'هناك فحص جارٍ. حاول مجددًا بعد انتهائه.',
@@ -52,9 +57,21 @@ async function responseError(response) {
 async function fetchJson(url, options) {
   let response;
   try {
-    response = await fetch(url, options);
+    const token = scanToken.value.trim();
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+    });
   } catch {
     throw new Error('تعذّر الاتصال بالخادم. تحقّق من الاتصال وحاول مجددًا.');
+  }
+  if (response.status === 401) {
+    scanAccess.hidden = false;
+    scanAccess.open = true;
+    scanToken.focus();
   }
   if (!response.ok) throw new Error(await responseError(response));
   return { response, data: await response.json() };

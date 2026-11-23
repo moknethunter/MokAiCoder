@@ -62,11 +62,67 @@
           </div>
         </div>
 
+        <div class="chat-selects">
+          <div>
+            <label for="chat-reviewer">المزوّد المراجع</label>
+            <select id="chat-reviewer">
+              <option value="">دون مراجع</option>
+            </select>
+          </div>
+          <div id="chat-review-model-field" hidden>
+            <label for="chat-review-model">نموذج المراجعة</label>
+            <select id="chat-review-model" dir="ltr"></select>
+          </div>
+        </div>
+
         <ol
           id="chat-messages"
           class="chat-messages"
           aria-label="سجل المحادثة"
         ></ol>
+
+        <details id="chat-workspace" class="chat-attachment" hidden>
+          <summary>تعديل ملف مشروع</summary>
+          <form id="workspace-form">
+            <label for="workspace-source">المشروع</label>
+            <select id="workspace-source"></select>
+            <label for="workspace-path">مسار الملف داخل المشروع</label>
+            <input
+              id="workspace-path"
+              dir="ltr"
+              maxlength="240"
+              required
+              placeholder="src/example.ts"
+            />
+            <button id="workspace-open" type="submit">فتح الملف</button>
+            <button id="workspace-close" type="button" hidden>
+              إلغاء اختيار الملف
+            </button>
+          </form>
+          <section id="workspace-preview" hidden>
+            <details>
+              <summary>محتوى الملف قبل التعديل</summary>
+              <pre id="workspace-before" dir="ltr"></pre>
+            </details>
+            <label for="workspace-after">محتوى الملف المقترح</label>
+            <textarea
+              id="workspace-after"
+              rows="12"
+              maxlength="8000"
+              dir="ltr"
+            ></textarea>
+            <button id="workspace-publish" type="button" disabled>
+              حفظ التعديل
+            </button>
+            <a
+              id="workspace-compare"
+              target="_blank"
+              rel="noopener noreferrer"
+              hidden
+              >فتح المقارنة وإنشاء طلب دمج على GitHub</a
+            >
+          </section>
+        </details>
 
         <form id="chat-form">
           <label for="chat-message">سؤالك</label>
@@ -87,11 +143,17 @@
             <select id="chat-file" dir="ltr">
               <option value="">دون ملف</option>
             </select>
-            <label class="chat-choice" id="chat-share-label" hidden>
-              <input id="chat-share" type="checkbox" />
-              أوافق على إرسال مقتطف من هذا الملف إلى المزوّد السحابي لهذا الطلب.
-            </label>
           </details>
+
+          <label class="chat-choice" id="chat-share-label" hidden>
+            <input id="chat-share" type="checkbox" />
+            أوافق على إرسال محتوى الملف الذي اخترته إلى المزوّدات السحابية
+            المشاركة.
+          </label>
+          <label class="chat-choice" id="chat-review-share-label" hidden>
+            <input id="chat-review-share" type="checkbox" />
+            أوافق على مشاركة المحادثة والمسودة والمراجعة بين المزوّدات المختارة.
+          </label>
 
           <label class="chat-choice" id="chat-paid-label" hidden>
             <input id="chat-paid" type="checkbox" />
