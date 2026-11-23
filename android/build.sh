@@ -45,6 +45,9 @@ case "$edition" in
   full) manifest="$source_dir/AndroidManifest.xml" ;;
   *) printf 'Unknown Android edition: %s\n' "$edition" >&2; exit 1 ;;
 esac
+if [[ "$edition" == full && "${MOKAI_ANDROID_BUILD_LOCAL_MODELS:-0}" == 1 ]]; then
+  "$source_dir/build-native.sh" "$work/native/lib/arm64-v8a"
+fi
 package_options=()
 if [[ -n "${MOKAI_ANDROID_APPLICATION_ID:-}" ]]; then
   package_options=(--rename-manifest-package "$MOKAI_ANDROID_APPLICATION_ID")

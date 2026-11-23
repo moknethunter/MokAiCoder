@@ -85,6 +85,7 @@ export async function createApp({ logger = true } = {}) {
     ? { onRequest: accessGuard(process.env.MOKAI_CHAT_TOKEN) }
     : {};
   app.get('/chat', async (_req, reply) => reply.sendFile('chat.html'));
+  app.get('/project', async (_req, reply) => reply.sendFile('project.html'));
 
   app.post('/api/project/scan', projectAccess, async (req, reply) => {
     const { branch } = scanSchema.parse(req.body === undefined ? {} : req.body);

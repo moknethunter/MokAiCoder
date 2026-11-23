@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { AppError } from '../plugins/errorHandler.js';
 import { accessGuard } from '../auth.js';
 import { collaborate, type Participant } from './collaboration.js';
+import { canShareFile, configuredSecrets, redact } from './redact.js';
+import { registerProjectAssistant } from './projectAssistant.js';
 import {
   editSelection,
   fileSelection,
@@ -63,26 +65,6 @@ const SYSTEM_PROMPT = [
 
 const event = (name: string, data: unknown) =>
   `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
-const sensitivePath =
-  /^(?:\.env(?:[._-].*)?|\.netrc|\.npmrc|\.pypirc|\.gnupg|\.htpasswd|credentials?(?:[._-].*)?|secrets?(?:[._-].*)?)$/i;
-
-function redact(text: string, secrets: string[]): string {
-  for (const secret of secrets) text = text.replaceAll(secret, '[REDACTED]');
-  return text
-    .replace(
-      /-----BEGIN [^\r\n]+?PRIVATE KEY-----[\s\S]*?(?:-----END [^\r\n]+?PRIVATE KEY-----|$)/g,
-      '[REDACTED]',
-    )
-    .replace(
-      /\b(?:gh[pousr]_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{12,}|sk-[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16})\b/g,
-      '[REDACTED]',
-    )
-    .replace(
-      /(\b(?:access[_-]?token|api[_-]?key|client[_-]?secret|password|authorization|token|secret)\b["']?\s*[:=]\s*["']?)(?:Bearer\s+)?[^\s"'\x60,;]+/gi,
-      '$1[REDACTED]',
-    );
-}
-
 export function registerAi(
   app: FastifyInstance,
   cache: ProjectCache,
@@ -97,14 +79,14 @@ export function registerAi(
       provider,
     ]),
   );
-  const secrets = [
-    token,
-    env.OPENROUTER_API_KEY,
-    env.XAI_API_KEY,
-    env.MOKAI_GITHUB_WRITE_TOKEN,
-    env.PAID_AI_API_KEY,
-    env.GITHUB_TOKEN,
-  ].filter((secret): secret is string => Boolean(secret));
+  const secrets = configuredSecrets(env);
+  registerProjectAssistant(
+    app,
+    workspace,
+    requireToken,
+    providers.get('grok'),
+    secrets,
+  );
   const active = new Set<AbortController>();
   let requests: number[] = [];
 
@@ -267,11 +249,7 @@ export function registerAi(
             'The scan result has changed or expired',
           );
         const file = snapshot.files.get(path);
-        if (
-          !file ||
-          shouldIgnore(path) ||
-          path.split('/').some((part) => sensitivePath.test(part))
-        ) {
+        if (!file || shouldIgnore(path) || !canShareFile(path)) {
           throw new AppError(
             404,
             'FILE_NOT_FOUND',

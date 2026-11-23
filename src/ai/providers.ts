@@ -16,6 +16,7 @@ export interface ModelProvider {
     messages: Turn[],
     signal: AbortSignal,
     requireComplete?: boolean,
+    maxTokens?: number,
   ): Promise<AsyncIterable<string>>;
 }
 
@@ -152,6 +153,7 @@ class CompatibleProvider implements ModelProvider {
     messages: Turn[],
     signal: AbortSignal,
     requireComplete = false,
+    maxTokens = 1536,
   ): Promise<AsyncIterable<string>> {
     try {
       const response = await fetch(
@@ -169,7 +171,7 @@ class CompatibleProvider implements ModelProvider {
             model,
             messages,
             stream: true,
-            [this.config.tokenParameter ?? 'max_tokens']: 1536,
+            [this.config.tokenParameter ?? 'max_tokens']: maxTokens,
           }),
         },
       );

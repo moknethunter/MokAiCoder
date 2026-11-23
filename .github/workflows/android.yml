@@ -14,7 +14,7 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -26,14 +26,16 @@ jobs:
           javac -encoding UTF-8 -d "$RUNNER_TEMP/mokai-tests" \
             android/src/org/mokai/coder/LocalExports.java \
             android/src/org/mokai/coder/OfflineModel.java \
-            android/test/LocalToolsTest.java
+            android/src/org/mokai/coder/LocalModelCatalog.java \
+            android/test/LocalToolsTest.java android/test/LocalModelPolicyTest.java
           java -cp "$RUNNER_TEMP/mokai-tests" org.mokai.coder.LocalToolsTest
+          java -cp "$RUNNER_TEMP/mokai-tests" org.mokai.coder.LocalModelPolicyTest
       - name: Install Android SDK and build tools
         uses: android-actions/setup-android@v4
         with:
           packages: 'platforms;android-35 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: false
-      - name: Build signed preview APK
+      - name: Generate preview signing key
         env:
           MOKAI_ANDROID_KS_PASS: preview-test
           MOKAI_ANDROID_APPLICATION_ID: org.mokai.coder.preview
@@ -42,9 +44,6 @@ jobs:
           keytool -genkeypair -keyalg RSA -keysize 2048 -validity 3650 \
             -alias mokai -dname 'CN=MokAiCoder Preview' \
             -keystore "$MOKAI_ANDROID_KEYSTORE" -storepass "$MOKAI_ANDROID_KS_PASS"
-          ./android/build.sh "$RUNNER_TEMP/MokAiCoder-Offline-Preview.apk"
-          unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Offline-Preview.apk" | grep -Fx 'lib/arm64-v8a/libvosk.so'
-          unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Offline-Preview.apk" | grep -Fx 'lib/arm64-v8a/libjnidispatch.so'
       - name: Build voice and documents edition
         env:
           MOKAI_ANDROID_KS_PASS: preview-test
@@ -58,8 +57,25 @@ jobs:
           name: MokAiCoder-Voice-Docs
           path: ${{ runner.temp }}/MokAiCoder-Voice-Docs.apk
           if-no-files-found: error
+      - name: Install native build tools
+        run: |
+          sdkmanager 'ndk;28.2.13676358'
+          if ! command -v cmake || ! command -v ninja; then
+            python3 -m venv "$RUNNER_TEMP/mokai-build"
+            "$RUNNER_TEMP/mokai-build/bin/pip" install --quiet cmake==3.31.8 ninja==1.11.1.4
+            echo "$RUNNER_TEMP/mokai-build/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Build signed project assistant preview
+        env:
+          MOKAI_ANDROID_KS_PASS: preview-test
+          MOKAI_ANDROID_APPLICATION_ID: org.mokai.coder.assistant.preview
+          MOKAI_ANDROID_BUILD_LOCAL_MODELS: '1'
+        run: |
+          export MOKAI_ANDROID_KEYSTORE="$RUNNER_TEMP/mokai-preview.jks"
+          ./android/build.sh "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk"
+          unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" | grep -Fx 'lib/arm64-v8a/libmokai_llm.so'
       - uses: actions/upload-artifact@v4
         with:
-          name: MokAiCoder-Offline-Preview
-          path: ${{ runner.temp }}/MokAiCoder-Offline-Preview.apk
+          name: MokAiCoder-Assistant-Preview
+          path: ${{ runner.temp }}/MokAiCoder-Assistant-Preview.apk
           if-no-files-found: error

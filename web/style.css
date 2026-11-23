@@ -496,3 +496,25 @@ pre {
   width: 100%;
   font-family: var(--mono, monospace);
 }
+
+.project-result {
+  display: grid;
+  gap: 12px;
+}
+
+.project-result pre,
+.project-result p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.project-result pre {
+  background: #f4f8f6;
+  padding: 10px;
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.project-result details {
+  margin-block: 8px;
+}

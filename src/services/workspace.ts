@@ -6,7 +6,7 @@ import { Octokit } from '@octokit/rest';
 import { RequestError } from '@octokit/request-error';
 import { z } from 'zod';
 import { AppError } from '../plugins/errorHandler.js';
-import { shouldIgnore } from './projectService.js';
+import { ProjectService, shouldIgnore } from './projectService.js';
 
 export const EDIT_LIMIT = 8_000;
 const SOURCE_LIMIT = 64_000;
@@ -90,7 +90,7 @@ export class Workspace {
   private readonly root?: string;
   private readonly pending = new Set<string>();
 
-  constructor(env: NodeJS.ProcessEnv) {
+  constructor(private readonly env: NodeJS.ProcessEnv) {
     this.reader = new Octokit({
       auth: env.GITHUB_TOKEN || env.MOKAI_GITHUB_WRITE_TOKEN || undefined,
     });
@@ -248,12 +248,15 @@ export class Workspace {
     }
   }
 
-  private async githubFile(path: string, github: Octokit) {
+  private async githubHead(
+    github: Octokit,
+    signal = AbortSignal.timeout(15_000),
+  ) {
     if (!this.owner || !this.repo) throw unavailable();
     const request = {
       owner: this.owner,
       repo: this.repo,
-      request: { signal: AbortSignal.timeout(15_000) },
+      request: { signal },
     };
     const { data: ref } = await github.git.getRef({
       ...request,
@@ -263,6 +266,80 @@ export class Workspace {
       ...request,
       commit_sha: ref.object.sha,
     });
+    return { request, head };
+  }
+
+  async reviewSnapshot(signal: AbortSignal) {
+    try {
+      const { head } = await this.githubHead(this.reader, signal);
+      const files = await new ProjectService(this.env).loadAllFiles(
+        head.tree.sha,
+        signal,
+      );
+      return { revision: head.sha, files };
+    } catch (error) {
+      throw this.githubError(error);
+    }
+  }
+
+  async publishProject(
+    revision: string,
+    changes: { path: string; content: string; create: boolean }[],
+  ) {
+    const github = this.writer;
+    if (!github)
+      throw new AppError(
+        503,
+        'WORKSPACE_WRITE_DISABLED',
+        'Configure a GitHub publishing credential',
+      );
+    const key = 'github/project/' + revision;
+    if (this.pending.has(key))
+      throw new AppError(
+        409,
+        'WORKSPACE_BUSY',
+        'A project update is in progress',
+      );
+    this.pending.add(key);
+    try {
+      const { request, head } = await this.githubHead(github);
+      if (head.sha !== revision) throw changed();
+      const { data } = await github.git.getTree({
+        ...request,
+        tree_sha: head.tree.sha,
+        recursive: '1',
+      });
+      if (data.truncated) throw unavailable();
+      const current = new Map(data.tree.map((entry) => [entry.path, entry]));
+      const entries = changes.map(({ path, create, content }) => {
+        if (!fileSelection.shape.path.safeParse(path).success)
+          throw unavailable();
+        const old = current.get(path);
+        if (create ? old : old?.mode !== '100644' && old?.mode !== '100755')
+          throw changed();
+        return {
+          path,
+          content,
+          type: 'blob' as const,
+          mode:
+            old?.mode === '100755' ? ('100755' as const) : ('100644' as const),
+        };
+      });
+      return await this.commitProject(
+        github,
+        { request, head },
+        entries,
+        'MokAiCoder: apply reviewed project changes',
+      );
+    } catch (error) {
+      throw this.githubError(error);
+    } finally {
+      this.pending.delete(key);
+    }
+  }
+
+  private async githubFile(path: string, github: Octokit) {
+    const { request, head } = await this.githubHead(github);
     const base = head.tree.sha;
     let tree = base;
     const segments = path.split('/');
@@ -320,64 +397,82 @@ export class Workspace {
         github,
       );
       this.verify(input, snapshot);
-      const mode = 'mode' in snapshot ? snapshot.mode : '100644';
-      const { data: tree } = await github.git.createTree({
-        ...request,
-        base_tree: head.tree.sha,
-        tree: [
-          { path: input.path, mode, type: 'blob', content: input.content },
-        ],
-      });
-      const { data: commit } = await github.git.createCommit({
-        ...request,
-        message: 'MokAiCoder: update ' + input.path,
-        tree: tree.sha,
-        parents: [head.sha],
-      });
-      const branch =
-        'mokai/edit-' + checksum(head.sha + ':' + tree.sha).slice(0, 20);
-      try {
-        await github.git.createRef({
-          ...request,
-          ref: 'refs/heads/' + branch,
-          sha: commit.sha,
-        });
-      } catch (error) {
-        if (
-          !(error instanceof RequestError) ||
-          ![409, 422].includes(error.status)
-        )
-          throw error;
-        const { data: existing } = await github.git.getRef({
-          ...request,
-          ref: 'heads/' + branch,
-        });
-        const { data: saved } = await github.git.getCommit({
-          ...request,
-          commit_sha: existing.object.sha,
-        });
-        if (saved.tree.sha !== tree.sha || saved.parents[0]?.sha !== head.sha)
-          throw error;
-      }
-      const repository =
-        'https://github.com/' +
-        encodeURIComponent(this.owner) +
-        '/' +
-        encodeURIComponent(this.repo);
-      return {
-        source: 'github',
-        branch,
-        compareUrl:
-          repository +
-          '/compare/' +
-          encodeURIComponent(this.branch) +
-          '...' +
-          encodeURIComponent(branch) +
-          '?expand=1',
-      } as const;
+      const mode =
+        'mode' in snapshot && snapshot.mode === '100755' ? '100755' : '100644';
+      return await this.commitProject(
+        github,
+        { request, head },
+        [{ path: input.path, mode, type: 'blob', content: input.content }],
+        'MokAiCoder: update ' + input.path,
+      );
     } catch (error) {
       throw this.githubError(error);
     }
+  }
+
+  private async commitProject(
+    github: Octokit,
+    { request, head }: Awaited<ReturnType<Workspace['githubHead']>>,
+    entries: {
+      path: string;
+      mode: '100644' | '100755';
+      type: 'blob';
+      content: string;
+    }[],
+    message: string,
+  ) {
+    const { data: tree } = await github.git.createTree({
+      ...request,
+      base_tree: head.tree.sha,
+      tree: entries,
+    });
+    const { data: commit } = await github.git.createCommit({
+      ...request,
+      message,
+      tree: tree.sha,
+      parents: [head.sha],
+    });
+    const branch =
+      'mokai/edit-' + checksum(head.sha + ':' + tree.sha).slice(0, 20);
+    try {
+      await github.git.createRef({
+        ...request,
+        ref: 'refs/heads/' + branch,
+        sha: commit.sha,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof RequestError) ||
+        ![409, 422].includes(error.status)
+      )
+        throw error;
+      const { data: existing } = await github.git.getRef({
+        ...request,
+        ref: 'heads/' + branch,
+      });
+      const { data: saved } = await github.git.getCommit({
+        ...request,
+        commit_sha: existing.object.sha,
+      });
+      if (saved.tree.sha !== tree.sha || saved.parents[0]?.sha !== head.sha)
+        throw error;
+    }
+    const repository =
+      'https://github.com/' +
+      encodeURIComponent(this.owner) +
+      '/' +
+      encodeURIComponent(this.repo);
+    return {
+      source: 'github',
+      branch,
+      compareUrl:
+        repository +
+        '/compare/' +
+        encodeURIComponent(this.branch) +
+        '...' +
+        encodeURIComponent(branch) +
+        '?expand=1',
+    } as const;
   }
 
   private verify(input: Publication, snapshot: Snapshot) {

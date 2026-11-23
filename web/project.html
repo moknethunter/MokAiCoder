@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MokAiCoder | مساعد المشروع</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/project.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <span class="wordmark" dir="ltr">MokAiCoder</span>
+        <nav class="app-nav" aria-label="التنقل">
+          <a href="/">فحص المشروع</a>
+          <a href="/chat">المحادثة</a>
+          <a href="/project" aria-current="page">مساعد المشروع</a>
+        </nav>
+      </div>
+    </header>
+    <main class="shell chat-shell">
+      <h1>مساعد المشروع على Grok</h1>
+      <form id="project-unlock" class="panel chat-panel">
+        <label for="project-token">رمز وصول MokAiCoder</label>
+        <div class="chat-unlock">
+          <input
+            id="project-token"
+            type="password"
+            dir="ltr"
+            minlength="24"
+            autocomplete="current-password"
+            required
+          />
+          <button class="chat-primary">فتح مساعد المشروع</button>
+        </div>
+      </form>
+      <p
+        id="project-status"
+        class="status"
+        role="status"
+        aria-live="polite"
+        hidden
+      ></p>
+      <section id="project-session" class="panel chat-panel" hidden>
+        <div class="chat-heading">
+          <strong id="project-repo" dir="ltr"></strong>
+          <button id="project-lock" type="button">قفل</button>
+        </div>
+        <form id="project-run">
+          <div class="chat-selects">
+            <label
+              >المهمة
+              <select id="project-action">
+                <option value="review">فحص ومراجعة المشروع</option>
+                <option value="edit">اقتراح تعديلات على المشروع</option>
+              </select>
+            </label>
+            <label
+              >نموذج Grok<select id="project-model" dir="ltr" required></select
+            ></label>
+          </div>
+          <label for="project-task">ما المطلوب في المشروع؟</label>
+          <textarea
+            id="project-task"
+            rows="5"
+            dir="auto"
+            maxlength="4000"
+            required
+          ></textarea>
+          <label class="chat-choice"
+            ><input id="project-share" type="checkbox" required />أوافق على
+            إرسال ملفات المشروع النصية المؤهلة إلى Grok.</label
+          >
+          <label class="chat-choice"
+            ><input id="project-paid" type="checkbox" required />أوافق على أن
+            الطلب قد يخصم من رصيد xAI.</label
+          >
+          <div class="chat-actions">
+            <button id="project-start" type="submit" class="chat-primary">
+              ابدأ فحص المشروع
+            </button>
+            <button id="project-stop" type="button" hidden>إيقاف الفحص</button>
+          </div>
+        </form>
+        <section id="project-result" class="project-result" hidden>
+          <h2>نتائج الفحص</h2>
+          <p id="project-coverage"></p>
+          <pre id="project-report" dir="auto"></pre>
+          <p id="project-plan-summary"></p>
+          <div id="project-changes"></div>
+          <p id="project-verification"></p>
+          <button
+            id="project-publish"
+            type="button"
+            class="chat-primary"
+            hidden
+          >
+            إنشاء فرع بهذه التعديلات
+          </button>
+          <a
+            id="project-compare"
+            target="_blank"
+            rel="noopener noreferrer"
+            hidden
+            >عرض المقارنة وإنشاء طلب دمج</a
+          >
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
