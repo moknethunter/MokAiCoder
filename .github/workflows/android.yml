@@ -28,8 +28,11 @@ jobs:
             android/src/org/mokai/coder/OfflineModel.java \
             android/test/LocalToolsTest.java
           java -cp "$RUNNER_TEMP/mokai-tests" org.mokai.coder.LocalToolsTest
-      - name: Install build tools
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Install Android SDK and build tools
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
       - name: Build signed preview APK
         env:
           MOKAI_ANDROID_KS_PASS: preview-test
