@@ -14,7 +14,10 @@ This edition opens directly to local voice and document tools. Its package ID is
 
 ## Full edition
 
-- **Hosted chat and project assistant.** In Connection, select the MokAiCoder server and enter its HTTPS address and access token. The server can provide Grok, OpenRouter, or Ollama. Open **Project Assistant** to review and propose changes across a configured GitHub repository with Grok.
+The app opens to chat. Use the three-line menu to open the project, tools, or connection settings.
+
+- **Direct chat.** Save the Grok and OpenRouter API keys separately under Connection Settings. Both remain available after provider changes, app restarts, and network interruptions. The keys are encrypted on the device. Sending messages through these providers requires internet access.
+- **Hosted chat and project assistant.** In Connection Settings, select the MokAiCoder server and enter its HTTPS address and access token. The server can provide Grok, OpenRouter, or Ollama. Open **Project Assistant** to review and propose changes across a configured GitHub repository with Grok.
 - **Local model manager.** Open **Phone Models** or enter `نزّل نموذج Qwen3-0.6B` in chat. The app checks the phone's architecture, available memory, and storage before downloading a supported catalog model. It verifies the file checksum and registers it for use. Android continues downloads in the background and the app checks their status when reopened.
 - **Model import and selection.** Import a local text GGUF compatible with llama.cpp. Choose a model explicitly or let the app select a downloaded coding or general model. It loads one model at a time and accepts files up to approximately 2.73 GiB, subject to available resources.
 - **Local interface designer.** Use the tools menu to preview a responsive layout and export it as HTML.
@@ -32,4 +35,4 @@ MOKAI_ANDROID_BUILD_LOCAL_MODELS=1 ./android/build.sh android/build/MokAiCoder-A
 
 Install Android NDK 28.2.13676358, CMake, and Ninja for the full build with local models enabled. The script retrieves pinned Vosk and JNA dependencies. The native build uses a pinned llama.cpp revision.
 
-GitHub Actions signs previews with a per-run key. The full preview uses `org.mokai.coder.interface.preview`. To distribute an update over an existing installation, build with the same package ID and signing key as that installation.
+GitHub Actions signs previews with a per-run key. The full preview uses `org.mokai.coder.chat.preview`. To distribute an update over an existing installation, build with the same package ID and signing key as that installation.

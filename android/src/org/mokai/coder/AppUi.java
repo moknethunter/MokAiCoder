@@ -7,14 +7,12 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
-import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -104,67 +102,26 @@ final class AppUi {
         parent.addView(label, spaced(parent.getContext(), 4));
     }
 
-    static void styleTab(TextView tab, int kind, boolean selected) {
-        int color = selected ? ACCENT : MUTED;
-        tab.setSelected(selected);
-        tab.setGravity(Gravity.CENTER);
-        tab.setTextColor(color);
-        tab.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
-        int size = dp(tab.getContext(), 22);
-        Drawable icon = new NavGlyph(kind, color);
-        icon.setBounds(0, 0, size, size);
-        tab.setCompoundDrawablesRelative(null, icon, null, null);
-        tab.setCompoundDrawablePadding(dp(tab.getContext(), 3));
-        tab.setBackground(new RippleDrawable(ColorStateList.valueOf(0x25176E51),
-                shape(tab.getContext(), selected ? MINT : SURFACE, Color.TRANSPARENT, 15), null));
-    }
-
-    private static final class NavGlyph extends Drawable {
-        private final int kind;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-        NavGlyph(int kind, int color) {
-            this.kind = kind;
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(1.7f);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-        }
-
-        @Override public void draw(Canvas canvas) {
-            int state = canvas.save();
-            canvas.translate(getBounds().left, getBounds().top);
-            canvas.scale(getBounds().width() / 24f, getBounds().height() / 24f);
-            Path shape = new Path();
-            if (kind == 0) {
-                shape.moveTo(4, 5); shape.lineTo(20, 5); shape.quadTo(21, 5, 21, 7);
-                shape.lineTo(21, 15); shape.quadTo(21, 17, 19, 17); shape.lineTo(10, 17);
-                shape.lineTo(5, 20); shape.lineTo(5, 17); shape.quadTo(3, 17, 3, 15);
-                shape.lineTo(3, 7); shape.quadTo(3, 5, 4, 5); shape.close();
-                canvas.drawPath(shape, paint);
-                canvas.drawLine(7, 9, 17, 9, paint);
-                canvas.drawLine(7, 13, 14, 13, paint);
-            } else if (kind == 1) {
-                shape.moveTo(3, 7); shape.quadTo(3, 5, 5, 5); shape.lineTo(10, 5);
-                shape.lineTo(12, 8); shape.lineTo(19, 8); shape.quadTo(21, 8, 21, 10);
-                shape.lineTo(21, 17); shape.quadTo(21, 19, 19, 19); shape.lineTo(5, 19);
-                shape.quadTo(3, 19, 3, 17); shape.close();
-                canvas.drawPath(shape, paint);
-            } else {
-                for (int row = 0; row < 2; row++) {
-                    for (int column = 0; column < 2; column++) {
-                        float left = 4 + column * 9;
-                        float top = 4 + row * 9;
-                        canvas.drawRoundRect(left, top, left + 7, top + 7, 1.4f, 1.4f, paint);
-                    }
-                }
+    static Drawable menuIcon() {
+        return new Drawable() {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            {
+                paint.setColor(INK);
+                paint.setStrokeWidth(1.8f);
+                paint.setStrokeCap(Paint.Cap.ROUND);
             }
-            canvas.restoreToCount(state);
-        }
 
-        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); invalidateSelf(); }
-        @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); invalidateSelf(); }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+            @Override public void draw(Canvas canvas) {
+                int state = canvas.save();
+                canvas.translate(getBounds().left, getBounds().top);
+                canvas.scale(getBounds().width() / 24f, getBounds().height() / 24f);
+                for (int y = 6; y <= 18; y += 6) canvas.drawLine(4, y, 20, y, paint);
+                canvas.restoreToCount(state);
+            }
+
+            @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); invalidateSelf(); }
+            @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); invalidateSelf(); }
+            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        };
     }
 }

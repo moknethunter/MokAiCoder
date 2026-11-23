@@ -5,11 +5,12 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.ActivityNotFoundException;
 import android.net.Uri;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Bundle;
 import android.text.InputFilter;
 import android.text.InputType;
-import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
@@ -17,7 +18,7 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -28,6 +29,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.net.NoRouteToHostException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -49,12 +52,18 @@ public final class MainActivity extends Activity {
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final List<Turn> history = new ArrayList<>();
     private ConnectionStore connections;
+    private ChatProfiles profiles;
     private ChatClient.Settings settings;
     private ChatClient.Call active;
     private LinearLayout transcript;
     private ScrollView scroll;
     private TextView status;
-    private TextView source;
+    private TextView screenTitle;
+    private LinearLayout application;
+    private FrameLayout navigation;
+    private ScrollView drawerPanel;
+    private ImageButton menu;
+    private Button closeMenu;
     private EditText prompt;
     private Button send;
     private Button configure;
@@ -62,11 +71,7 @@ public final class MainActivity extends Activity {
     private Button clear;
     private View scanCard;
     private LinearLayout empty;
-    private TextView emptyTitle;
-    private TextView emptyHint;
-    private Button emptyConnect;
     private final View[] pages = new View[3];
-    private final TextView[] tabs = new TextView[3];
     private int selectedTab;
     private boolean closed;
     private boolean scanning;
@@ -75,38 +80,38 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedState) {
         super.onCreate(savedState);
         connections = new ConnectionStore(this);
-        LinearLayout root = column();
-        root.setBackgroundColor(AppUi.BACKGROUND);
+        FrameLayout root = new FrameLayout(this);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setFocusableInTouchMode(true);
-        root.addView(buildHeader(), new LinearLayout.LayoutParams(-1, -2));
+        application = column();
+        application.setBackgroundColor(AppUi.BACKGROUND);
+        application.setFocusableInTouchMode(true);
+        application.addView(buildHeader(), new LinearLayout.LayoutParams(-1, -2));
 
         FrameLayout content = new FrameLayout(this);
         pages[Tabs.CHAT] = buildChatPage();
         pages[Tabs.PROJECTS] = buildProjectsPage();
         pages[Tabs.TOOLS] = buildToolsPage();
         for (View page : pages) content.addView(page, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
+        application.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
 
         status = label("", 13, MUTED, false);
         status.setPadding(dp(16), dp(4), dp(16), dp(6));
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         status.setVisibility(View.GONE);
-        root.addView(status, new LinearLayout.LayoutParams(-1, -2));
-        root.addView(buildNavigation(), new LinearLayout.LayoutParams(-1, -2));
+        application.addView(status, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(application, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(buildNavigation(), new FrameLayout.LayoutParams(-1, -1));
 
         setContentView(root);
-        root.requestFocus();
+        application.requestFocus();
         showTab(savedState == null ? Tabs.CHAT : savedState.getInt("screen", Tabs.CHAT));
         refreshEmptyChat();
         try {
-            JSONObject saved = connections.read("chat");
-            if (saved.has("secret")) {
-                settings = readSettings(saved);
-                showConnection();
-            }
+            profiles = loadProfiles();
+            settings = readSettings(profiles.get(profiles.activeMode()), profiles.activeMode());
+            showConnection();
         } catch (Exception unavailable) {
-            sessionStatus("تعذّرت استعادة الاتصال المحفوظ. أعد ضبطه من الاتصال.");
+            sessionStatus("تعذّرت استعادة الإعدادات المحفوظة. افتح القائمة للمحاولة مرة أخرى.");
         }
     }
 
@@ -114,41 +119,27 @@ public final class MainActivity extends Activity {
         LinearLayout banner = row();
         banner.setBackgroundColor(AppUi.SURFACE);
         banner.setGravity(Gravity.CENTER_VERTICAL);
-        banner.setPadding(dp(16), dp(10), dp(16), dp(10));
-        ImageView icon = new ImageView(this);
-        icon.setImageResource(getApplicationInfo().icon);
-        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        banner.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        banner.setPadding(dp(12), dp(6), dp(16), dp(6));
+        menu = new ImageButton(this);
+        menu.setImageDrawable(AppUi.menuIcon());
+        menu.setPadding(dp(12), dp(12), dp(12), dp(12));
+        menu.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        menu.setContentDescription("فتح القائمة");
+        menu.setStateListAnimator(null);
+        menu.setBackground(new RippleDrawable(ColorStateList.valueOf(0x25176E51),
+                AppUi.shape(this, AppUi.SURFACE, AppUi.LINE, 14), null));
+        menu.setOnClickListener(view -> openMenu());
+        banner.addView(menu, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
-        LinearLayout title = column();
-        title.setPaddingRelative(dp(10), 0, dp(8), 0);
-        TextView brand = label("MokAiCoder", 20, INK, true);
-        brand.setTextDirection(View.TEXT_DIRECTION_LTR);
-        brand.setGravity(Gravity.START);
-        title.addView(brand);
-        source = label("إعداد الاتصال", 13, MUTED, false);
-        source.setSingleLine();
-        source.setEllipsize(TextUtils.TruncateAt.END);
-        title.addView(source);
-        banner.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        configure = button("الاتصال", false);
-        configure.setOnClickListener(view -> connectionDialog());
-        banner.addView(configure, new LinearLayout.LayoutParams(-2, -2));
+        screenTitle = label("MokAiCoder", 21, INK, true);
+        screenTitle.setPaddingRelative(dp(12), 0, 0, 0);
+        screenTitle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        banner.addView(screenTitle, new LinearLayout.LayoutParams(0, -1, 1));
         return banner;
     }
 
     private View buildChatPage() {
         LinearLayout chat = column();
-        LinearLayout heading = row();
-        heading.setGravity(Gravity.CENTER_VERTICAL);
-        heading.setPadding(dp(16), dp(6), dp(16), dp(4));
-        TextView title = label("المحادثة", 19, INK, true);
-        heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        clear = button("محادثة جديدة", false);
-        clear.setOnClickListener(view -> resetChat());
-        heading.addView(clear);
-        chat.addView(heading);
-
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         LinearLayout body = column();
@@ -156,14 +147,7 @@ public final class MainActivity extends Activity {
         empty = column();
         empty.setGravity(Gravity.CENTER_VERTICAL);
         empty.setPadding(dp(16), dp(24), dp(16), dp(24));
-        emptyTitle = label("", 24, INK, true);
-        emptyHint = label("", 16, MUTED, false);
-        emptyHint.setLineSpacing(dp(4), 1);
-        empty.addView(emptyTitle);
-        empty.addView(emptyHint, AppUi.spaced(this, 8));
-        emptyConnect = button("إعداد الاتصال", true);
-        emptyConnect.setOnClickListener(view -> connectionDialog());
-        empty.addView(emptyConnect, AppUi.spaced(this, 18));
+        empty.addView(label("كيف أساعدك؟", 26, INK, true));
         body.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1));
         transcript = column();
         body.addView(transcript, new LinearLayout.LayoutParams(-1, -2));
@@ -254,42 +238,86 @@ public final class MainActivity extends Activity {
     }
 
     private View buildNavigation() {
-        LinearLayout navigation = row();
-        navigation.setPadding(dp(10), dp(6), dp(10), dp(8));
-        navigation.setBackgroundColor(AppUi.SURFACE);
-        navigation.setElevation(dp(3));
-        String[] names = {"المحادثة", "المشروع", "الأدوات"};
-        for (int index = 0; index < names.length; index++) {
-            int page = index;
-            Button tab = new Button(this);
-            tab.setText(names[index]);
-            tab.setAllCaps(false);
-            tab.setTextSize(13);
-            tab.setMinHeight(dp(56));
-            tab.setMinimumHeight(dp(56));
-            tab.setPadding(dp(4), dp(7), dp(4), dp(7));
-            tab.setStateListAnimator(null);
-            tab.setOnClickListener(view -> showTab(page));
-            tabs[index] = tab;
-            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(0, -2, 1);
-            size.setMarginStart(dp(3));
-            size.setMarginEnd(dp(3));
-            navigation.addView(tab, size);
-        }
+        navigation = new FrameLayout(this);
+        navigation.setVisibility(View.GONE);
+        navigation.setBackgroundColor(0x55142923);
+        navigation.setOnClickListener(view -> closeMenu());
+
+        LinearLayout panel = column();
+        panel.setPadding(dp(16), dp(14), dp(16), dp(20));
+        panel.setBackgroundColor(AppUi.SURFACE);
+        panel.setClickable(true);
+        LinearLayout top = row();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = label("MokAiCoder", 20, INK, true);
+        top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        closeMenu = button("إغلاق", false);
+        closeMenu.setOnClickListener(view -> closeMenu());
+        top.addView(closeMenu);
+        panel.addView(top);
+        addMenuItem(panel, "المحادثة", () -> showTab(Tabs.CHAT), true);
+        clear = addMenuItem(panel, "محادثة جديدة", () -> {
+            resetChat();
+            showTab(Tabs.CHAT);
+        }, false);
+        addMenuItem(panel, "المشروع", () -> showTab(Tabs.PROJECTS), false);
+        addMenuItem(panel, "الأدوات", () -> showTab(Tabs.TOOLS), false);
+        configure = addMenuItem(panel, "إعدادات الاتصال", this::connectionDialog, false);
+
+        drawerPanel = scrollPage(panel);
+        drawerPanel.setBackgroundColor(AppUi.SURFACE);
+        drawerPanel.setFillViewport(true);
+        drawerPanel.setElevation(dp(8));
+        navigation.addView(drawerPanel, new FrameLayout.LayoutParams(dp(304), -1, Gravity.START));
         return navigation;
+    }
+
+    private Button addMenuItem(LinearLayout panel, String title, Runnable action, boolean primary) {
+        Button item = button(title, primary);
+        item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        item.setOnClickListener(view -> {
+            closeMenu();
+            action.run();
+        });
+        panel.addView(item, AppUi.spaced(this, 9));
+        return item;
+    }
+
+    private void openMenu() {
+        if (navigation.getVisibility() == View.VISIBLE) return;
+        dismissKeyboard();
+        FrameLayout.LayoutParams size = (FrameLayout.LayoutParams) drawerPanel.getLayoutParams();
+        int width = application.getWidth();
+        size.width = width > 0 ? Math.min(dp(320), (int) (width * .86f)) : dp(304);
+        drawerPanel.setLayoutParams(size);
+        application.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        navigation.setVisibility(View.VISIBLE);
+        drawerPanel.setTranslationX(size.width);
+        drawerPanel.animate().translationX(0).setDuration(170).start();
+        closeMenu.requestFocus();
+    }
+
+    private void closeMenu() {
+        drawerPanel.animate().cancel();
+        navigation.setVisibility(View.GONE);
+        application.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        menu.requestFocus();
+    }
+
+    private void dismissKeyboard() {
+        if (!prompt.hasFocus()) return;
+        InputMethodManager keyboard = getSystemService(InputMethodManager.class);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(prompt.getWindowToken(), 0);
+        prompt.clearFocus();
     }
 
     private void showTab(int index) {
         selectedTab = Math.max(Tabs.CHAT, Math.min(index, Tabs.TOOLS));
-        if (selectedTab != Tabs.CHAT && prompt.hasFocus()) {
-            InputMethodManager keyboard = getSystemService(InputMethodManager.class);
-            if (keyboard != null) keyboard.hideSoftInputFromWindow(prompt.getWindowToken(), 0);
-            prompt.clearFocus();
-        }
+        if (selectedTab != Tabs.CHAT) dismissKeyboard();
+        screenTitle.setText(selectedTab == Tabs.PROJECTS ? "المشروع"
+                : selectedTab == Tabs.TOOLS ? "الأدوات" : "MokAiCoder");
         for (int i = 0; i < pages.length; i++) {
-            boolean selected = i == selectedTab;
-            pages[i].setVisibility(selected ? View.VISIBLE : View.GONE);
-            AppUi.styleTab(tabs[i], i, selected);
+            pages[i].setVisibility(i == selectedTab ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -301,15 +329,7 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshEmptyChat() {
-        boolean needsConnection = settings == null;
-        emptyTitle.setText(needsConnection ? "ابدأ محادثتك" : "كيف أساعدك في الكود؟");
-        emptyHint.setText(needsConnection
-                ? "اضبط Grok أو OpenRouter أو خادم MokAiCoder لإرسال رسالتك الأولى."
-                : "اكتب سؤالك أو الصق مقطع كود للمراجعة.");
-        emptyConnect.setVisibility(needsConnection ? View.VISIBLE : View.GONE);
-        emptyConnect.setEnabled(active == null);
         empty.setVisibility(transcript.getChildCount() == 0 ? View.VISIBLE : View.GONE);
-        clear.setVisibility(transcript.getChildCount() == 0 ? View.GONE : View.VISIBLE);
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -318,17 +338,30 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (selectedTab == Tabs.CHAT) super.onBackPressed();
-        else showTab(Tabs.CHAT);
+        if (navigation.getVisibility() == View.VISIBLE) closeMenu();
+        else if (selectedTab != Tabs.CHAT) showTab(Tabs.CHAT);
+        else super.onBackPressed();
+    }
+
+    private ChatProfiles loadProfiles() throws Exception {
+        return ChatProfiles.from(connections.read(ChatProfiles.STORAGE_NAME));
     }
 
     private void connectionDialog() {
+        if (active != null) return;
+        final ChatProfiles current;
+        try {
+            current = profiles == null ? loadProfiles() : profiles;
+        } catch (Exception unavailable) {
+            sessionStatus("تعذّرت قراءة الإعدادات المحفوظة. جرّب مرة أخرى.");
+            return;
+        }
         LinearLayout fields = column();
         fields.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         fields.setPadding(dp(20), dp(8), dp(20), dp(8));
         Spinner mode = picker(new String[]{"OpenRouter المجاني", "خادم MokAiCoder", "Grok مباشر"});
-        int initialMode = settings == null || settings.directGrok() ? 2 : settings.server ? 1 : 0;
-        mode.setSelection(initialMode);
+        mode.setSelection(current.activeMode());
+        JSONObject savedServer = current.get(ChatProfiles.SERVER);
         addField(fields, "طريقة الاتصال", mode);
         EditText address = field("https://", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         EditText secret = field("", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -358,7 +391,7 @@ public final class MainActivity extends Activity {
         EditText grokModel = field("اختياري، يُكتشف تلقائيًا", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         grokModel.setTextDirection(View.TEXT_DIRECTION_LTR);
-        if (settings != null && settings.directGrok()) grokModel.setText(settings.model);
+        grokModel.setText(current.get(ChatProfiles.GROK).optString("model"));
         LinearLayout grokFields = column();
         addField(grokFields, "معرّف نموذج Grok", grokModel);
         fields.addView(secretLabel);
@@ -372,12 +405,12 @@ public final class MainActivity extends Activity {
         TextView error = label("", 13, Color.rgb(151, 48, 43), false);
         fields.addView(error);
 
-        int initialProvider = settings == null ? providerIndex("grok") : providerIndex(settings.provider);
+        int initialProvider = providerIndex(savedServer.optString("provider", "grok"));
         provider.setSelection(initialProvider);
-        int initialReviewer = settings == null || !settings.collaborates()
-                ? 0 : providerIndex(settings.reviewer) + 1;
+        String savedReviewer = savedServer.optString("reviewer");
+        int initialReviewer = savedReviewer.isEmpty() ? 0 : providerIndex(savedReviewer) + 1;
         reviewer.setSelection(initialReviewer);
-        if (initialReviewer != 0) reviewModel.setText(settings.reviewModel);
+        reviewModel.setText(savedServer.optString("reviewModel"));
         reviewFields.setVisibility(initialReviewer == 0 ? View.GONE : View.VISIBLE);
         reviewer.setOnItemSelectedListener(new Selection() {
             private int selection = initialReviewer;
@@ -387,13 +420,13 @@ public final class MainActivity extends Activity {
                 selection = position;
             }
         });
-        model.setText(settings != null && settings.server ? settings.model : DEFAULT_MODELS[initialProvider]);
-        if (settings != null && settings.server) address.setText(settings.base.toString());
+        model.setText(savedServer.optString("model", DEFAULT_MODELS[initialProvider]));
+        address.setText(savedServer.optString("address"));
 
         Runnable updateMode = () -> {
             int selected = mode.getSelectedItemPosition();
-            boolean useServer = selected == 1;
-            boolean useGrok = selected == 2;
+            boolean useServer = selected == ChatProfiles.SERVER;
+            boolean useGrok = selected == ChatProfiles.GROK;
             serverFields.setVisibility(useServer ? View.VISIBLE : View.GONE);
             advanced.setVisibility(useServer || useGrok ? View.VISIBLE : View.GONE);
             advanced.setText(advanced.isSelected() ? "إخفاء الإعدادات المتقدمة" : "إعدادات متقدمة");
@@ -401,8 +434,8 @@ public final class MainActivity extends Activity {
             grokFields.setVisibility(useGrok && advanced.isSelected() ? View.VISIBLE : View.GONE);
             secretLabel.setText(useServer ? "رمز وصول MokAiCoder"
                     : useGrok ? "مفتاح API من xAI" : "مفتاح API من OpenRouter");
-            secret.setHint(settings != null && selected == initialMode
-                    ? "محفوظ على الهاتف · اتركه فارغًا للاحتفاظ به" : "أدخل المفتاح أو الرمز");
+            boolean stored = !current.get(selected).optString("secret").isEmpty();
+            secret.setHint(stored ? "محفوظ على الهاتف · اتركه فارغًا للاحتفاظ به" : "أدخل المفتاح أو الرمز");
         };
         advanced.setOnClickListener(view -> {
             advanced.setSelected(!advanced.isSelected());
@@ -410,10 +443,11 @@ public final class MainActivity extends Activity {
         });
         updateMode.run();
         mode.setOnItemSelectedListener(new Selection() {
-            private int previous = initialMode;
+            private int previous = current.activeMode();
             @Override public void select(int position) {
                 if (position != previous) {
                     secret.getText().clear();
+                    error.setText("");
                     advanced.setSelected(false);
                 }
                 previous = position;
@@ -431,76 +465,95 @@ public final class MainActivity extends Activity {
         ScrollView dialogScroll = new ScrollView(this);
         dialogScroll.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         dialogScroll.addView(fields);
-        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("إعداد الاتصال")
                 .setView(dialogScroll)
                 .setNegativeButton("إلغاء", null)
-                .setPositiveButton("حفظ", null);
-        if (settings != null) builder.setNeutralButton("حذف الاتصال", (ignored, which) -> forgetConnection());
-        AlertDialog dialog = builder.create();
-        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener(view -> {
-                    String key = secret.getText().toString().trim();
-                    int selected = mode.getSelectedItemPosition();
-                    if (key.isEmpty() && settings != null && selected == initialMode) key = settings.secret;
-                    try {
-                        if (key.isEmpty()) throw new IllegalArgumentException("أدخل مفتاح API أو رمز الوصول.");
+                .setNeutralButton("حذف المفتاح المحدد", null)
+                .setPositiveButton("حفظ", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+                int selected = mode.getSelectedItemPosition();
+                if (current.get(selected).optString("secret").isEmpty()) {
+                    error.setText("لا يوجد مفتاح محفوظ لهذا المزوّد.");
+                } else if (forgetConnection(current, selected)) {
+                    dialog.dismiss();
+                } else {
+                    error.setText("تعذّر حذف المفتاح المحدد.");
+                }
+            });
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                int selected = mode.getSelectedItemPosition();
+                String entered = secret.getText().toString().trim();
+                String key = entered.isEmpty() ? current.get(selected).optString("secret") : entered;
+                try {
+                    if (key.isEmpty()) throw new IllegalArgumentException("أدخل مفتاح API أو رمز الوصول.");
+                    JSONObject saved = new JSONObject().put("secret", key);
+                    if (selected == ChatProfiles.GROK) {
+                        saved.put("model", grokModel.getText().toString());
+                    } else if (selected == ChatProfiles.SERVER) {
                         int reviewIndex = reviewer.getSelectedItemPosition();
-                        JSONObject saved = new JSONObject().put("mode", selected).put("secret", key)
-                                .put("address", address.getText().toString())
+                        saved.put("address", address.getText().toString())
                                 .put("provider", PROVIDERS[provider.getSelectedItemPosition()])
-                                .put("model", selected == 2 ? grokModel.getText().toString() : model.getText().toString())
+                                .put("model", model.getText().toString())
                                 .put("reviewer", reviewIndex == 0 ? "" : PROVIDERS[reviewIndex - 1])
                                 .put("reviewModel", reviewModel.getText().toString());
-                        ChatClient.Settings updated = readSettings(saved);
-                        connections.save("chat", saved);
-                        settings = updated;
-                        resetChat();
-                        showConnection();
-                        secret.getText().clear();
-                        dialog.dismiss();
-                    } catch (IllegalArgumentException invalid) {
-                        String message = invalid.getMessage();
-                        error.setText(message != null && !message.isEmpty() && message.charAt(0) >= 0x0600
-                                ? message : "تحقّق من رابط الخادم أو معرّف النموذج.");
-                    } catch (Exception unavailable) {
-                        error.setText("تعذّر حفظ الاتصال على الهاتف.");
                     }
-                }));
+                    ChatClient.Settings updated = readSettings(saved, selected);
+                    ChatProfiles next = current.select(selected, saved);
+                    connections.save(ChatProfiles.STORAGE_NAME, next.toJson());
+                    profiles = next;
+                    settings = updated;
+                    resetChat();
+                    showConnection();
+                    secret.getText().clear();
+                    dialog.dismiss();
+                    sessionStatus("حُفظت الإعدادات على الهاتف.");
+                } catch (IllegalArgumentException invalid) {
+                    String message = invalid.getMessage();
+                    error.setText(message != null && !message.isEmpty() && message.charAt(0) >= 0x0600
+                            ? message : "تحقّق من رابط الخادم أو معرّف النموذج.");
+                } catch (Exception unavailable) {
+                    error.setText("تعذّر حفظ الإعدادات على الهاتف.");
+                }
+            });
+        });
         dialog.show();
     }
 
-    private ChatClient.Settings readSettings(JSONObject saved) throws JSONException {
-        String key = saved.getString("secret");
-        switch (saved.getInt("mode")) {
-            case 1:
+    private ChatClient.Settings readSettings(JSONObject saved, int mode) throws JSONException {
+        String key = saved.optString("secret");
+        if (key.isEmpty()) return null;
+        switch (mode) {
+            case ChatProfiles.SERVER:
                 return ChatClient.Settings.server(saved.getString("address"), key, saved.getString("provider"),
                         saved.getString("model"), saved.getString("reviewer"), saved.getString("reviewModel"));
-            case 2:
-                return ChatClient.Settings.grok(key, saved.getString("model"));
+            case ChatProfiles.GROK:
+                return ChatClient.Settings.grok(key, saved.optString("model"));
             default:
                 return ChatClient.Settings.free(key);
         }
     }
 
     private void showConnection() {
-        source.setText(settings.server ? "خادم MokAiCoder"
-                : settings.directGrok() ? "Grok مباشر" : "OpenRouter · نموذج مجاني");
-        scanCard.setVisibility(settings.server ? View.VISIBLE : View.GONE);
-        refreshEmptyChat();
-        sessionStatus("الاتصال محفوظ على الهاتف.");
+        scanCard.setVisibility(settings != null && settings.server ? View.VISIBLE : View.GONE);
     }
 
-    private void forgetConnection() {
+    private boolean forgetConnection(ChatProfiles current, int mode) {
         try {
-            connections.remove("chat");
-            settings = null;
-            resetChat();
-            scanCard.setVisibility(View.GONE);
-            source.setText("إعداد الاتصال");
-            sessionStatus("حُذف الاتصال المحفوظ.");
-        } catch (IllegalStateException unavailable) {
-            sessionStatus("تعذّر حذف الاتصال المحفوظ.");
+            ChatProfiles next = current.remove(mode);
+            connections.save(ChatProfiles.STORAGE_NAME, next.toJson());
+            profiles = next;
+            if (current.activeMode() == mode) {
+                settings = null;
+                resetChat();
+                showConnection();
+            }
+            sessionStatus("حُذف مفتاح المزوّد المحدد.");
+            return true;
+        } catch (Exception unavailable) {
+            return false;
         }
     }
 
@@ -527,12 +580,12 @@ public final class MainActivity extends Activity {
             openLocalModels(question);
             return;
         }
-        if (settings == null) {
-            connectionDialog();
-            return;
-        }
         if (question.isEmpty()) {
             prompt.requestFocus();
+            return;
+        }
+        if (settings == null) {
+            connectionDialog();
             return;
         }
 
@@ -689,6 +742,8 @@ public final class MainActivity extends Activity {
 
     private String errorText(ChatClient.Call call, Exception problem) {
         if (call.isCancelled()) return "أوقفت الطلب.";
+        if (problem instanceof UnknownHostException || problem instanceof NoRouteToHostException)
+            return "تعذّر الوصول إلى الإنترنت. أعد إرسال رسالتك عند عودة الاتصال.";
         if (problem instanceof SocketTimeoutException) return "انتهت مهلة الاتصال. جرّب مرة أخرى.";
         String message = problem.getMessage();
         if (message != null && !message.isEmpty() && message.charAt(0) >= 0x0600) return message;

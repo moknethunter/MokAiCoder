@@ -30,6 +30,14 @@ jobs:
             android/test/LocalToolsTest.java android/test/LocalModelPolicyTest.java
           java -cp "$RUNNER_TEMP/mokai-tests" org.mokai.coder.LocalToolsTest
           java -cp "$RUNNER_TEMP/mokai-tests" org.mokai.coder.LocalModelPolicyTest
+      - name: Verify chat profile migration and provider switching
+        run: |
+          json_jar="$RUNNER_TEMP/json-20250517.jar"
+          curl -fsSL --retry 3 -o "$json_jar" https://repo.maven.apache.org/maven2/org/json/json/20250517/json-20250517.jar
+          printf '%s  %s\n' 3ea61b2a06e31edf1c91134fe9106b0ebb16628be169f3db75bc7a2b06b45796 "$json_jar" | sha256sum -c
+          javac -encoding UTF-8 -cp "$json_jar" -d "$RUNNER_TEMP/mokai-tests" \
+            android/src/org/mokai/coder/ChatProfiles.java android/test/ChatProfilesTest.java
+          java -cp "$RUNNER_TEMP/mokai-tests:$json_jar" org.mokai.coder.ChatProfilesTest
       - name: Install Android SDK and build tools
         uses: android-actions/setup-android@v4
         with:
@@ -68,14 +76,14 @@ jobs:
       - name: Build signed project assistant preview
         env:
           MOKAI_ANDROID_KS_PASS: preview-test
-          MOKAI_ANDROID_APPLICATION_ID: org.mokai.coder.interface.preview
+          MOKAI_ANDROID_APPLICATION_ID: org.mokai.coder.chat.preview
           MOKAI_ANDROID_BUILD_LOCAL_MODELS: '1'
         run: |
           export MOKAI_ANDROID_KEYSTORE="$RUNNER_TEMP/mokai-preview.jks"
           ./android/build.sh "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk"
           unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" | grep -Fx 'lib/arm64-v8a/libmokai_llm.so'
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" |
-            grep -F "package: name='org.mokai.coder.interface.preview'"
+            grep -F "package: name='org.mokai.coder.chat.preview'"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump resources "$RUNNER_TEMP/MokAiCoder-Assistant-Preview.apk" |
             grep -F 'mipmap/mokai_launcher'
       - uses: actions/upload-artifact@v4
