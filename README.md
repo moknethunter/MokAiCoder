@@ -47,3 +47,16 @@ npm test
 ```
 
 The GitHub workflows build and test the Node.js service, verify the Docker image, and assemble the Android preview APKs.
+
+
+## Direct Android and VS Code connections
+
+In the full Android edition, choose **Grok مباشر** to use xAI from the phone.
+The app stores connection credentials with Android Keystore encryption.
+The **GitHub** screen can read public repositories directly. For a private
+repository, use a fine-grained read-only token or install a GitHub App with
+Contents read-only permission and enable its device flow. The Android client
+takes the app's public Client ID and handles user authorization and token refresh.
+
+The [desktop extension](vscode/README.md) runs against the xAI API from VS Code.
+See the [Arabic guide](docs/help.ar.md) for the phone setup.

@@ -15,6 +15,7 @@ import javax.net.ssl.HttpsURLConnection;
 
 final class ChatClient {
     private static final URI OPENROUTER = URI.create("https://openrouter.ai/api/v1/");
+    private static final URI XAI = URI.create("https://api.x.ai/v1/");
     private static final int RESPONSE_LIMIT = 32_000;
 
     static final class Settings {
@@ -41,6 +42,14 @@ final class ChatClient {
             return new Settings(false, OPENROUTER, secret, "openrouter", "openrouter/free", "", "");
         }
 
+        static Settings grok(String secret, String model) {
+            return new Settings(false, XAI, secret, "grok", model.trim(), "", "");
+        }
+
+        boolean directGrok() {
+            return !server && "grok".equals(provider);
+        }
+
         static Settings server(String address, String secret, String provider, String model,
                                String reviewer, String reviewModel) {
             URI parsed = URI.create(address.trim());
@@ -61,7 +70,7 @@ final class ChatClient {
         }
 
         boolean paid() {
-            return server && (mayCharge(provider) || mayCharge(reviewer));
+            return directGrok() || (server && (mayCharge(provider) || mayCharge(reviewer)));
         }
 
         boolean collaborates() {
@@ -119,7 +128,7 @@ final class ChatClient {
             HttpsURLConnection active = connect(settings,
                     settings.server ? "api/ai/chat" : "chat/completions", request);
             try {
-                verifyStatus(active, settings.server);
+                verifyStatus(active, settings);
                 try (BufferedReader reader = reader(active)) {
                     return readStream(reader, settings.server, listener);
                 }
@@ -134,7 +143,7 @@ final class ChatClient {
             if (!branch.isEmpty()) request.put("branch", branch);
             HttpsURLConnection active = connect(settings, "api/project/scan", request);
             try {
-                verifyStatus(active, true);
+                verifyStatus(active, settings);
                 try (BufferedReader reader = reader(active)) {
                     StringBuilder result = new StringBuilder();
                     char[] chunk = new char[8192];
@@ -155,9 +164,9 @@ final class ChatClient {
         }
 
         private String firstGrokModel(Settings settings) throws IOException, JSONException {
-            HttpsURLConnection active = connect(settings, "api/ai/providers/grok/models", null);
+            HttpsURLConnection active = connect(settings, settings.server ? "api/ai/providers/grok/models" : "models", null);
             try {
-                verifyStatus(active, true);
+                verifyStatus(active, settings);
                 try (BufferedReader reader = reader(active)) {
                     StringBuilder result = new StringBuilder();
                     char[] chunk = new char[2048];
@@ -166,9 +175,15 @@ final class ChatClient {
                         if (result.length() + count > 64_000) throw new IOException("قائمة نماذج Grok كبيرة.");
                         result.append(chunk, 0, count);
                     }
-                    JSONObject model = new JSONArray(result.toString()).optJSONObject(0);
-                    if (model != null && !model.optString("id").isEmpty()) return model.getString("id");
-                    throw new IOException("لم يعرض الخادم نموذج Grok. تحقق من إعداد XAI_MODELS.");
+                    JSONArray models = settings.server ? new JSONArray(result.toString())
+                            : new JSONObject(result.toString()).getJSONArray("data");
+                    for (int i = 0; i < models.length(); i++) {
+                        String id = models.getJSONObject(i).optString("id");
+                        if (!id.isEmpty() && (settings.server || (id.startsWith("grok-")
+                                && !id.contains("image") && !id.contains("video")
+                                && !id.contains("voice")))) return id;
+                    }
+                    throw new IOException("لم نجد نموذج محادثة Grok. أدخل معرّف النموذج في الاتصال.");
                 }
             } finally {
                 active.disconnect();
@@ -279,13 +294,15 @@ final class ChatClient {
             return new BufferedReader(new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8));
         }
 
-        private void verifyStatus(HttpsURLConnection active, boolean server) throws IOException {
+        private void verifyStatus(HttpsURLConnection active, Settings settings) throws IOException {
+            boolean server = settings.server;
             int status = active.getResponseCode();
             if (status >= 200 && status < 300) return;
             if (status == 401 || status == 403) {
                 throw new IOException(server ? "رفض الخادم طلب الوصول. راجع رمز الدخول والإعدادات."
-                        : "رفض OpenRouter مفتاح API. تحقّق من المفتاح.");
+                        : "رفض " + (settings.directGrok() ? "Grok" : "OpenRouter") + " مفتاح API. تحقّق من المفتاح.");
             }
+            if (status == 402) throw new IOException("يتطلب هذا الطلب رصيد API لدى المزوّد.");
             if (status == 429) {
                 String retry = active.getHeaderField("Retry-After");
                 String message = retry != null && retry.matches("[0-9]{1,8}")
