@@ -42,6 +42,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -137,12 +138,16 @@ public final class BotActivity extends Activity {
         refreshCatalog(0);
     }
 
+    private boolean toolsOnly() {
+        return "org.mokai.coder.tools".equals(getPackageName());
+    }
+
     private void readBots() {
         String raw = preferences.getString("bots", null);
         if (raw == null) {
             bots.add(new Bot("voice", KIND_LABELS[0], 0));
             bots.add(new Bot("document", KIND_LABELS[1], 1));
-            bots.add(new Bot("interface", KIND_LABELS[2], 2));
+            if (!toolsOnly()) bots.add(new Bot("interface", KIND_LABELS[2], 2));
             return;
         }
         try {
@@ -150,7 +155,7 @@ public final class BotActivity extends Activity {
             for (int i = 0; i < data.length(); i++) {
                 JSONObject record = data.getJSONObject(i);
                 int kind = record.getInt("kind");
-                if (kind >= 0 && kind < KIND_LABELS.length)
+                if (kind >= 0 && kind < (toolsOnly() ? 2 : KIND_LABELS.length))
                     bots.add(new Bot(record.getString("id"), record.getString("name"), kind));
             }
         } catch (JSONException invalid) {
@@ -183,7 +188,7 @@ public final class BotActivity extends Activity {
         form.setPadding(dp(16), dp(6), dp(16), 0);
         form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         EditText name = field("اسم البوت", 80, false);
-        Spinner kind = spinner(KIND_LABELS);
+        Spinner kind = spinner(toolsOnly() ? Arrays.copyOf(KIND_LABELS, 2) : KIND_LABELS);
         form.addView(name);
         form.addView(kind);
         new AlertDialog.Builder(this).setTitle("إنشاء بوت على الهاتف").setView(form)

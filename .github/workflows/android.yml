@@ -45,6 +45,19 @@ jobs:
           ./android/build.sh "$RUNNER_TEMP/MokAiCoder-Offline-Preview.apk"
           unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Offline-Preview.apk" | grep -Fx 'lib/arm64-v8a/libvosk.so'
           unzip -Z1 "$RUNNER_TEMP/MokAiCoder-Offline-Preview.apk" | grep -Fx 'lib/arm64-v8a/libjnidispatch.so'
+      - name: Build voice and documents edition
+        env:
+          MOKAI_ANDROID_KS_PASS: preview-test
+          MOKAI_ANDROID_EDITION: tools
+        run: |
+          export MOKAI_ANDROID_KEYSTORE="$RUNNER_TEMP/mokai-preview.jks"
+          ./android/build.sh "$RUNNER_TEMP/MokAiCoder-Voice-Docs.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$RUNNER_TEMP/MokAiCoder-Voice-Docs.apk" | grep -F "package: name='org.mokai.coder.tools'"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MokAiCoder-Voice-Docs
+          path: ${{ runner.temp }}/MokAiCoder-Voice-Docs.apk
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: MokAiCoder-Offline-Preview

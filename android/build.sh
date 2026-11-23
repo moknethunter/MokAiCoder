@@ -39,20 +39,31 @@ for abi in arm64-v8a armeabi-v7a x86_64 x86; do
   unzip -p "$jna" "jni/$abi/libjnidispatch.so" > "$lib/libjnidispatch.so"
 done
 
+edition="${MOKAI_ANDROID_EDITION:-full}"
+case "$edition" in
+  tools) manifest="$source_dir/LocalToolsManifest.xml" ;;
+  full) manifest="$source_dir/AndroidManifest.xml" ;;
+  *) printf 'Unknown Android edition: %s\n' "$edition" >&2; exit 1 ;;
+esac
 package_options=()
 if [[ -n "${MOKAI_ANDROID_APPLICATION_ID:-}" ]]; then
   package_options=(--rename-manifest-package "$MOKAI_ANDROID_APPLICATION_ID")
 fi
 
 "$tools_dir/aapt2" compile --dir "$source_dir/res" -o "$work/resources.zip"
-"$tools_dir/aapt2" link -I "$platform" --manifest "$source_dir/AndroidManifest.xml" "${package_options[@]}" \
+"$tools_dir/aapt2" link -I "$platform" --manifest "$manifest" "${package_options[@]}" \
   -o "$work/app.apk" "$work/resources.zip"
 
 compiler=(javac)
 if [[ -n "${MOKAI_ANDROID_ECJ_JAR:-}" ]]; then
   compiler=(java -jar "$MOKAI_ANDROID_ECJ_JAR")
 fi
-mapfile -d '' -t sources < <(find "$source_dir/src" -type f -name '*.java' -print0)
+if [[ "$edition" == tools ]]; then
+  package="$source_dir/src/org/mokai/coder"
+  sources=("$package/BotActivity.java" "$package/LocalExports.java" "$package/OfflineModel.java")
+else
+  mapfile -d '' -t sources < <(find "$source_dir/src" -type f -name '*.java' -print0)
+fi
 "${compiler[@]}" -source 8 -target 8 -proc:none -encoding UTF-8 \
   -bootclasspath "$platform:$tools_dir/core-lambda-stubs.jar" -classpath "$work/vosk.jar:$work/jna.jar" -d "$work/classes" "${sources[@]}"
 (cd "$work/classes" && zip -q -r "$work/classes.jar" .)
