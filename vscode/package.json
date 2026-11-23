@@ -1,0 +1,31 @@
+{
+  "name": "mokai-coder",
+  "displayName": "MokAiCoder",
+  "description": "Ask Grok about your local code from Visual Studio Code.",
+  "version": "1.0.0",
+  "publisher": "moknethunter",
+  "engines": { "vscode": "^1.93.0" },
+  "categories": ["Programming Languages", "Other"],
+  "repository": { "type": "git", "url": "https://github.com/moknethunter/MokAiCoder.git" },
+  "extensionKind": ["ui"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "mokai.setGrokKey", "title": "MokAiCoder: Set Grok API Key" },
+      { "command": "mokai.removeGrokKey", "title": "MokAiCoder: Remove Grok API Key" },
+      { "command": "mokai.ask", "title": "MokAiCoder: Ask Grok" },
+      { "command": "mokai.review", "title": "MokAiCoder: Review Active File or Selection" }
+    ],
+    "configuration": {
+      "title": "MokAiCoder",
+      "properties": {
+        "mokai.grokModel": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Grok chat model ID. Leave empty to detect an available model."
+        }
+      }
+    }
+  }
+}

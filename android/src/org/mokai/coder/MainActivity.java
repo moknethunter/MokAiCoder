@@ -46,6 +46,7 @@ public final class MainActivity extends Activity {
 
     private final ExecutorService network = Executors.newSingleThreadExecutor();
     private final List<Turn> history = new ArrayList<>();
+    private ConnectionStore connections;
     private ChatClient.Settings settings;
     private ChatClient.Call active;
     private LinearLayout transcript;
@@ -62,6 +63,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedState) {
         super.onCreate(savedState);
+        connections = new ConnectionStore(this);
         LinearLayout root = column();
         root.setBackgroundColor(BACKGROUND);
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -109,6 +111,11 @@ public final class MainActivity extends Activity {
         Button project = button("مساعد المشروع", false);
         project.setOnClickListener(view -> launchProject());
         projectActions.addView(project, new LinearLayout.LayoutParams(0, -2, 1));
+        Button github = button("GitHub", false);
+        github.setOnClickListener(view -> {
+            if (active == null) startActivity(new Intent(this, GitHubActivity.class));
+        });
+        projectActions.addView(github);
         Button localModels = button("نماذج الهاتف", false);
         localModels.setOnClickListener(view -> openLocalModels(""));
         projectActions.addView(localModels, new LinearLayout.LayoutParams(0, -2, 1));
@@ -125,7 +132,7 @@ public final class MainActivity extends Activity {
         status.setPadding(dp(16), dp(5), dp(16), dp(7));
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         root.addView(status, new LinearLayout.LayoutParams(-1, -2));
-        sessionStatus("افتح الاتصال وأدخل مفتاح OpenRouter أو بيانات خادمك.");
+        sessionStatus("افتح الاتصال لإعداد Grok أو OpenRouter أو خادمك.");
 
         LinearLayout composer = row();
         composer.setGravity(Gravity.BOTTOM);
@@ -152,14 +159,24 @@ public final class MainActivity extends Activity {
         root.addView(composer, new LinearLayout.LayoutParams(-1, -2));
         setContentView(root);
         root.requestFocus();
+        try {
+            JSONObject saved = connections.read("chat");
+            if (saved.has("secret")) {
+                settings = readSettings(saved);
+                showConnection();
+            }
+        } catch (Exception unavailable) {
+            sessionStatus("تعذّرت استعادة الاتصال المحفوظ. أعد ضبطه من الاتصال.");
+        }
     }
 
     private void connectionDialog() {
         LinearLayout fields = column();
         fields.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         fields.setPadding(dp(20), dp(8), dp(20), dp(8));
-        Spinner mode = picker(new String[]{"OpenRouter المجاني", "خادم MokAiCoder"});
-        mode.setSelection(settings == null || settings.server ? 1 : 0);
+        Spinner mode = picker(new String[]{"OpenRouter المجاني", "خادم MokAiCoder", "Grok مباشر"});
+        int initialMode = settings == null || settings.directGrok() ? 2 : settings.server ? 1 : 0;
+        mode.setSelection(initialMode);
         addField(fields, "طريقة الاتصال", mode);
         EditText address = field("https://", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         EditText secret = field("", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -185,6 +202,13 @@ public final class MainActivity extends Activity {
         addField(reviewFields, "معرّف نموذج المراجعة", reviewModel);
         serverFields.addView(reviewFields);
         fields.addView(serverFields);
+        EditText grokModel = field("اختياري، يُكتشف تلقائيًا", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        grokModel.setTextDirection(View.TEXT_DIRECTION_LTR);
+        if (settings != null && settings.directGrok()) grokModel.setText(settings.model);
+        LinearLayout grokFields = column();
+        addField(grokFields, "معرّف نموذج Grok", grokModel);
+        fields.addView(grokFields);
         fields.addView(secretLabel);
         fields.addView(secret, fieldSize());
         TextView error = label("", 13, Color.rgb(151, 48, 43), false);
@@ -207,18 +231,25 @@ public final class MainActivity extends Activity {
         });
         model.setText(settings != null && settings.server ? settings.model : DEFAULT_MODELS[initialProvider]);
         if (settings != null && settings.server) address.setText(settings.base.toString());
-        if (settings != null) secret.setText(settings.secret);
+
         Runnable updateMode = () -> {
-            boolean useServer = mode.getSelectedItemPosition() == 1;
+            int selected = mode.getSelectedItemPosition();
+            boolean useServer = selected == 1;
+            boolean useGrok = selected == 2;
             serverFields.setVisibility(useServer ? View.VISIBLE : View.GONE);
-            secretLabel.setText(useServer ? "رمز وصول MokAiCoder" : "مفتاح API من OpenRouter");
-            secret.setHint(useServer ? "رمز الدخول" : "sk-or-…");
+            grokFields.setVisibility(useGrok ? View.VISIBLE : View.GONE);
+            secretLabel.setText(useServer ? "رمز وصول MokAiCoder"
+                    : useGrok ? "مفتاح API من xAI" : "مفتاح API من OpenRouter");
+            secret.setHint(settings != null && selected == initialMode
+                    ? "محفوظ على الهاتف · اتركه فارغًا للاحتفاظ به" : "أدخل المفتاح أو الرمز");
         };
         updateMode.run();
         mode.setOnItemSelectedListener(new Selection() {
+            private int previous = initialMode;
             @Override public void select(int position) {
+                if (position != previous) secret.getText().clear();
+                previous = position;
                 updateMode.run();
-                if (settings != null && (position == 1) != settings.server) secret.getText().clear();
             }
         });
         provider.setOnItemSelectedListener(new Selection() {
@@ -236,41 +267,79 @@ public final class MainActivity extends Activity {
                 .setTitle("إعداد الاتصال")
                 .setView(dialogScroll)
                 .setNegativeButton("إلغاء", null)
+                .setNeutralButton("حذف الاتصال", settings == null ? null : (ignored, which) -> forgetConnection())
                 .setPositiveButton("حفظ", null)
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
                     String key = secret.getText().toString().trim();
+                    int selected = mode.getSelectedItemPosition();
+                    if (key.isEmpty() && settings != null && selected == initialMode) key = settings.secret;
                     try {
                         if (key.isEmpty()) throw new IllegalArgumentException("أدخل مفتاح API أو رمز الوصول.");
-                        boolean server = mode.getSelectedItemPosition() == 1;
                         int reviewIndex = reviewer.getSelectedItemPosition();
-                        settings = server
-                                ? ChatClient.Settings.server(address.getText().toString(), key,
-                                PROVIDERS[provider.getSelectedItemPosition()], model.getText().toString(),
-                                reviewIndex == 0 ? "" : PROVIDERS[reviewIndex - 1],
-                                reviewModel.getText().toString())
-                                : ChatClient.Settings.free(key);
+                        JSONObject saved = new JSONObject().put("mode", selected).put("secret", key)
+                                .put("address", address.getText().toString())
+                                .put("provider", PROVIDERS[provider.getSelectedItemPosition()])
+                                .put("model", selected == 2 ? grokModel.getText().toString() : model.getText().toString())
+                                .put("reviewer", reviewIndex == 0 ? "" : PROVIDERS[reviewIndex - 1])
+                                .put("reviewModel", reviewModel.getText().toString());
+                        ChatClient.Settings updated = readSettings(saved);
+                        connections.save("chat", saved);
+                        settings = updated;
                         history.clear();
                         transcript.removeAllViews();
-                        source.setText(server ? "خادم المشروع · " + (settings.model.isEmpty() ? "Grok" : settings.model) : "OpenRouter · نموذج مجاني");
-                        scan.setVisibility(server ? View.VISIBLE : View.GONE);
-                        sessionStatus("جاهز لإرسال سؤال.");
+                        showConnection();
                         secret.getText().clear();
                         dialog.dismiss();
                     } catch (IllegalArgumentException invalid) {
                         String message = invalid.getMessage();
                         error.setText(message != null && !message.isEmpty() && message.charAt(0) >= 0x0600
                                 ? message : "تحقّق من رابط الخادم أو معرّف النموذج.");
+                    } catch (Exception unavailable) {
+                        error.setText("تعذّر حفظ الاتصال على الهاتف.");
                     }
                 }));
         dialog.show();
     }
 
+    private ChatClient.Settings readSettings(JSONObject saved) throws JSONException {
+        String key = saved.getString("secret");
+        switch (saved.getInt("mode")) {
+            case 1:
+                return ChatClient.Settings.server(saved.getString("address"), key, saved.getString("provider"),
+                        saved.getString("model"), saved.getString("reviewer"), saved.getString("reviewModel"));
+            case 2:
+                return ChatClient.Settings.grok(key, saved.getString("model"));
+            default:
+                return ChatClient.Settings.free(key);
+        }
+    }
+
+    private void showConnection() {
+        source.setText(settings.server ? "خادم MokAiCoder"
+                : settings.directGrok() ? "Grok مباشر" : "OpenRouter · نموذج مجاني");
+        scan.setVisibility(settings.server ? View.VISIBLE : View.GONE);
+        sessionStatus("الاتصال محفوظ على الهاتف.");
+    }
+
+    private void forgetConnection() {
+        try {
+            connections.remove("chat");
+            settings = null;
+            history.clear();
+            transcript.removeAllViews();
+            scan.setVisibility(View.GONE);
+            source.setText("محادثة برمجية");
+            sessionStatus("حُذف الاتصال المحفوظ.");
+        } catch (IllegalStateException unavailable) {
+            sessionStatus("تعذّر حذف الاتصال المحفوظ.");
+        }
+    }
+
     private void launchProject() {
         if (settings == null || !settings.server) {
-            sessionStatus("اضبط اتصال خادم MokAiCoder لفتح مساعد المشروع على Grok.");
-            connectionDialog();
+            if (active == null) startActivity(new Intent(this, GitHubActivity.class));
             return;
         }
         try {
