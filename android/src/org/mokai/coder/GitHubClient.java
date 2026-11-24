@@ -12,14 +12,18 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 
 import javax.net.ssl.HttpsURLConnection;
 
 final class GitHubClient {
     private static final String API = "https://api.github.com";
     private static final String LOGIN = "https://github.com/login/";
-    private static final int MAX_FILE = 24_000;
+    static final int MAX_FILE = 24_000;
     static final int REPOSITORIES_PER_PAGE = 30;
     private static final String OWNER = "[A-Za-z0-9][A-Za-z0-9_-]*";
     private static final String REPOSITORY = OWNER + "/[A-Za-z0-9_.-]+";
@@ -150,6 +154,160 @@ final class GitHubClient {
         return connection.getString("token");
     }
 
+    static EditPlan previewEdits(String repository, String branch, String token,
+                                 Map<String, List<GitHubEdit.Replacement>> edits) throws Exception {
+        String url = repoUrl(repository);
+        JSONObject details = (JSONObject) request(url, token, null);
+        String base = branch.isEmpty() ? details.getString("default_branch") : branch;
+        String revision = branchRevision(url, base, token);
+        JSONObject commit = (JSONObject) request(url + "/git/commits/" + revision, token, null);
+        String baseTree = sha(commit.getJSONObject("tree"));
+        Map<String, JSONArray> directories = new HashMap<>();
+        JSONArray changes = new JSONArray();
+        StringBuilder preview = new StringBuilder();
+        for (Map.Entry<String, List<GitHubEdit.Replacement>> entry : edits.entrySet()) {
+            String path = entry.getKey();
+            JSONObject item = treeFile(url, baseTree, path, token, directories);
+            String original = file(repository, path, sha(item), token);
+            String content = GitHubEdit.apply(path, original, entry.getValue());
+            changes.put(new JSONObject().put("path", path).put("type", "blob")
+                    .put("mode", item.getString("mode")).put("content", content));
+            preview.append('\n').append(path).append('\n');
+            for (GitHubEdit.Replacement operation : entry.getValue()) {
+                preview.append("- ").append(operation.before.replace("\n", "\n- ")).append('\n');
+                preview.append("+ ").append(operation.after.replace("\n", "\n+ ")).append('\n');
+            }
+        }
+        return new EditPlan(repository, base, revision, baseTree, changes, preview.toString());
+    }
+
+    private static JSONObject treeFile(String url, String tree, String path, String token,
+                                       Map<String, JSONArray> directories) throws Exception {
+        String[] parts = path.split("/");
+        for (int depth = 0; depth < parts.length; depth++) {
+            JSONArray entries = directories.get(tree);
+            if (entries == null) {
+                JSONObject response = (JSONObject) request(url + "/git/trees/" + tree, token, null);
+                if (response.optBoolean("truncated")) throw new IOException("يتعذّر التحقق من شجرة الملفات كاملة.");
+                entries = response.getJSONArray("tree");
+                directories.put(tree, entries);
+            }
+            JSONObject match = null;
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject item = entries.getJSONObject(i);
+                if (parts[depth].equals(item.optString("path"))) {
+                    match = item;
+                    break;
+                }
+            }
+            if (match == null) break;
+            if (depth == parts.length - 1) {
+                String mode = match.optString("mode");
+                if ("blob".equals(match.optString("type")) && ("100644".equals(mode) || "100755".equals(mode))) {
+                    return match;
+                }
+            }
+            if (!"tree".equals(match.optString("type"))) break;
+            tree = sha(match);
+        }
+        throw new IOException("لم نجد ملفًا عاديًا في المسار «" + path + "».");
+    }
+
+    private static String branchRevision(String url, String branch, String token) throws Exception {
+        JSONObject ref = (JSONObject) request(url + "/git/ref/heads/" + encode(branch), token, null);
+        return sha(ref.getJSONObject("object"));
+    }
+
+    private static String sha(JSONObject object) throws Exception {
+        String value = object.getString("sha");
+        if (!value.matches("[a-f0-9]{40}")) throw new IOException("تعذّر التحقق من إصدار GitHub.");
+        return value;
+    }
+
+    static Publication publishEdits(EditPlan plan, String token) throws Exception {
+        if (token.isEmpty()) throw new IOException("أضف رمز GitHub بصلاحية الكتابة لهذا المستودع.");
+        String url = repoUrl(plan.repository);
+        try {
+            if (!plan.branchCreated) {
+                String published = plan.commit == null ? null : findBranch(url, plan.head, token);
+                if (published != null && !published.equals(plan.commit)) {
+                    throw new IOException("اسم فرع التعديل مستخدم بالفعل. جهّز معاينة جديدة.");
+                }
+                if (published == null) {
+                    if (!plan.revision.equals(branchRevision(url, plan.base, token))) {
+                        throw new IOException("تغيّر الفرع منذ المعاينة. أرسل الأمر مجددًا لمراجعة النسخة الجديدة.");
+                    }
+                    if (plan.commit == null) {
+                        JSONObject tree = (JSONObject) request(url + "/git/trees", token,
+                                new JSONObject().put("base_tree", plan.baseTree).put("tree", plan.changes));
+                        JSONObject commit = (JSONObject) request(url + "/git/commits", token, new JSONObject()
+                                .put("message", "Apply reviewed MokAiCoder chat edits").put("tree", sha(tree))
+                                .put("parents", new JSONArray().put(plan.revision)));
+                        plan.commit = sha(commit);
+                    }
+                    request(url + "/git/refs", token, new JSONObject().put("ref", "refs/heads/" + plan.head)
+                            .put("sha", plan.commit));
+                }
+                plan.branchCreated = true;
+            }
+        } catch (GitHubError failure) {
+            if (failure.status == 403 || failure.status == 404) {
+                throw new IOException("تعذّر رفع الفرع. تحقّق من إعدادات المستودع وصلاحية Contents: Read and write.");
+            }
+            throw failure;
+        }
+        String web = "https://github.com/" + plan.repository;
+        String compare = web + "/compare/" + encode(plan.base) + "..." + encode(plan.head) + "?expand=1";
+        try {
+            JSONObject pull = (JSONObject) request(url + "/pulls", token, new JSONObject()
+                    .put("title", "Apply MokAiCoder chat edits").put("base", plan.base)
+                    .put("head", plan.head).put("draft", true));
+            return new Publication(web + "/pull/" + pull.getInt("number"), true);
+        } catch (Exception rejected) {
+            return new Publication(compare, false);
+        }
+    }
+
+    private static String findBranch(String url, String branch, String token) throws Exception {
+        try {
+            return branchRevision(url, branch, token);
+        } catch (GitHubError failure) {
+            if (failure.status == 404) return null;
+            throw failure;
+        }
+    }
+
+    static final class EditPlan {
+        final String repository;
+        final String base;
+        final String revision;
+        final String preview;
+        private final String baseTree;
+        private final JSONArray changes;
+        private final String head = "mokai/chat-" + UUID.randomUUID();
+        private String commit;
+        private boolean branchCreated;
+
+        EditPlan(String repository, String base, String revision, String baseTree, JSONArray changes, String preview) {
+            this.repository = repository;
+            this.base = base;
+            this.revision = revision;
+            this.baseTree = baseTree;
+            this.changes = changes;
+            this.preview = preview;
+        }
+    }
+
+    static final class Publication {
+        final String url;
+        final boolean hasPullRequest;
+
+        Publication(String url, boolean hasPullRequest) {
+            this.url = url;
+            this.hasPullRequest = hasPullRequest;
+        }
+    }
+
     private static String revision(String repository, String ref, String token) throws Exception {
         JSONObject result;
         try {
@@ -235,16 +393,23 @@ final class GitHubClient {
             if (!token.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + token);
             if (body != null) {
                 connection.setRequestMethod("POST");
-                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
                 connection.setDoOutput(true);
-                StringBuilder form = new StringBuilder();
-                java.util.Iterator<String> names = body.keys();
-                while (names.hasNext()) {
-                    String name = names.next();
-                    if (form.length() != 0) form.append('&');
-                    form.append(encode(name)).append('=').append(encode(body.getString(name)));
+                String payload;
+                if (address.startsWith(API + "/")) {
+                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                    payload = body.toString();
+                } else {
+                    connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                    StringBuilder form = new StringBuilder();
+                    java.util.Iterator<String> names = body.keys();
+                    while (names.hasNext()) {
+                        String name = names.next();
+                        if (form.length() != 0) form.append('&');
+                        form.append(encode(name)).append('=').append(encode(body.getString(name)));
+                    }
+                    payload = form.toString();
                 }
-                byte[] bytes = form.toString().getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(bytes.length);
                 try (OutputStream output = connection.getOutputStream()) {
                     output.write(bytes);
