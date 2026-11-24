@@ -43,6 +43,12 @@ jobs:
         with:
           packages: 'platforms;android-35 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: false
+      - name: Test GitHub repository selection and read access
+        run: |
+          json_jar="$RUNNER_TEMP/json-20250517.jar"
+          javac -encoding UTF-8 -cp "$json_jar" -d "$RUNNER_TEMP/mokai-tests" \
+            android/src/org/mokai/coder/GitHubClient.java android/test/GitHubClientTest.java
+          java -cp "$RUNNER_TEMP/mokai-tests:$json_jar" org.mokai.coder.GitHubClientTest
       - name: Generate preview signing key
         env:
           MOKAI_ANDROID_KS_PASS: preview-test

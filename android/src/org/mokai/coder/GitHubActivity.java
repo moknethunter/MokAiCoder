@@ -60,9 +60,9 @@ public final class GitHubActivity extends Activity {
     private void setup() {
         LinearLayout fields = new LinearLayout(this);
         fields.setOrientation(LinearLayout.VERTICAL);
-        EditText repository = field(fields, "المالك/المستودع", saved.optString("repo", "moknethunter/MokAiCoder"), false);
+        EditText repository = field(fields, "حساب GitHub أو رابط المستودع", saved.optString("repo", "moknethunter/MokAiCoder"), false);
         EditText branch = field(fields, "الفرع (فارغ للفرع الافتراضي)", saved.optString("branch"), false);
-        TextView hint = label(fields, "أدخل اسم المستودع العام ثم احفظ. للمستودعات الخاصة افتح خيارات الوصول.", 14);
+        TextView hint = label(fields, "أدخل المالك/المستودع أو الصق رابط GitHub. اكتب اسم الحساب لعرض مستودعاته العامة.", 14);
         Button access = AppUi.button(this, "خيارات الوصول الخاص", false);
         fields.addView(access, AppUi.spaced(this, 7));
         LinearLayout advanced = new LinearLayout(this);
@@ -86,6 +86,15 @@ public final class GitHubActivity extends Activity {
                 dialog.dismiss();
             });
         }
+        button(fields, "عرض مستودعات الحساب", () -> {
+            try {
+                String target = GitHubClient.normalizeTarget(repository.getText().toString());
+                int separator = target.indexOf('/');
+                chooseRepository(separator < 0 ? target : target.substring(0, separator), 1, repository, dialog);
+            } catch (IllegalArgumentException invalid) {
+                hint.setText("اكتب اسم حساب GitHub أو رابط المستودع.");
+            }
+        });
         dialog.show();
         Button authorizeButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
         authorizeButton.setVisibility(View.GONE);
@@ -96,7 +105,13 @@ public final class GitHubActivity extends Activity {
             access.setText(expanded ? "خيارات الوصول الخاص" : "إخفاء خيارات الوصول الخاص");
         });
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            if (busy) return;
             try {
+                String target = GitHubClient.normalizeTarget(repository.getText().toString());
+                if (!target.contains("/")) {
+                    chooseRepository(target, 1, repository, dialog);
+                    return;
+                }
                 JSONObject candidate = candidate(repository, branch, client);
                 String entered = token.getText().toString().trim();
                 if (!entered.isEmpty()) {
@@ -114,6 +129,7 @@ public final class GitHubActivity extends Activity {
             }
         });
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+            if (busy) return;
             try {
                 JSONObject candidate = candidate(repository, branch, client);
                 if (!candidate.optString("client").matches("[A-Za-z0-9_]{8,100}")) {
@@ -128,12 +144,40 @@ public final class GitHubActivity extends Activity {
         });
     }
 
+    private void chooseRepository(String owner, int page, EditText field, AlertDialog setupDialog) {
+        run("جارٍ تحميل المستودعات العامة…", () -> {
+            JSONArray repositories = GitHubClient.publicRepositories(owner, page);
+            String[] names = new String[repositories.length()];
+            for (int index = 0; index < names.length; index++) {
+                names[index] = repositories.getJSONObject(index).getString("full_name");
+            }
+            ui(() -> {
+                finishWork(names.length == 0 ? "لا توجد مستودعات عامة في هذه الصفحة." : "اختر مستودعًا من القائمة.");
+                if (!setupDialog.isShowing()) return;
+                AlertDialog.Builder picker = new AlertDialog.Builder(this)
+                        .setTitle("مستودعات " + owner)
+                        .setNegativeButton("إلغاء", null);
+                if (names.length > 0) {
+                    picker.setItems(names, (dialog, index) -> field.setText(names[index]));
+                } else {
+                    picker.setMessage("لا توجد مستودعات عامة في هذه الصفحة.");
+                }
+                if (names.length == GitHubClient.REPOSITORIES_PER_PAGE) {
+                    picker.setNeutralButton("الصفحة التالية",
+                            (dialog, which) -> chooseRepository(owner, page + 1, field, setupDialog));
+                }
+                if (page > 1) {
+                    picker.setPositiveButton("الصفحة السابقة",
+                            (dialog, which) -> chooseRepository(owner, page - 1, field, setupDialog));
+                }
+                picker.show();
+            });
+        });
+    }
+
     private JSONObject candidate(EditText repo, EditText branch, EditText client) throws Exception {
-        String name = repo.getText().toString().trim().replaceFirst("^https://github\\.com/", "")
-                .replaceFirst("/$", "").replaceFirst("\\.git$", "");
-        if (!name.matches("[A-Za-z0-9-]+/[A-Za-z0-9_.-]+") || name.endsWith("/.") || name.endsWith("/..")) {
-            throw new IllegalArgumentException("Invalid repository");
-        }
+        String name = GitHubClient.normalizeTarget(repo.getText().toString());
+        if (!name.contains("/")) throw new IllegalArgumentException("Select a repository");
         JSONObject result = new JSONObject(saved.toString()).put("repo", name)
                 .put("branch", branch.getText().toString().trim()).put("client", client.getText().toString().trim());
         if (!name.equalsIgnoreCase(saved.optString("repo")) && !saved.has("expires")) result.remove("token");
@@ -183,21 +227,34 @@ public final class GitHubActivity extends Activity {
     }
 
     private void verifyAndSave(JSONObject candidate) {
-        run("جارٍ التحقق من المستودع…", () -> {
+        run("جارٍ التحقق من " + candidate.optString("repo") + "…", () -> {
             String token = candidate.optString("token");
             if (candidate.has("expires")) {
-                token = GitHubClient.accessToken(saved, store);
-                candidate.put("token", token).put("refresh", saved.optString("refresh"))
+                token = refreshTokenForPublicFallback(saved);
+                candidate.put("token", saved.optString("token")).put("refresh", saved.optString("refresh"))
                         .put("expires", saved.optLong("expires"));
             }
             saveVerified(candidate, token);
         });
     }
 
+    private String refreshTokenForPublicFallback(JSONObject connection) {
+        try {
+            long previousExpiry = connection.optLong("expires");
+            String token = GitHubClient.accessToken(connection);
+            if (connection.optLong("expires") != previousExpiry) store.save("github", connection);
+            return token;
+        } catch (Exception expired) {
+            return "";
+        }
+    }
+
     private void saveVerified(JSONObject candidate, String token) throws Exception {
-        GitHubClient.revision(candidate.getString("repo"), candidate.optString("branch"), token);
+        GitHubClient.Repository repo = GitHubClient.openRepository(candidate.getString("repo"),
+                candidate.optString("branch"), token);
+        candidate.put("repo", repo.name);
         store.save("github", candidate);
-        ui(() -> { saved = candidate; files.removeAllViews(); showSaved(); });
+        ui(() -> { saved = candidate; showDirectory(repo, "", repo.files); });
     }
 
     private void showSaved() {
@@ -207,44 +264,44 @@ public final class GitHubActivity extends Activity {
 
     private void openRepository() {
         run("جارٍ فتح المستودع…", () -> {
-            String token = GitHubClient.accessToken(saved, store);
-            String sha = GitHubClient.revision(saved.getString("repo"), saved.optString("branch"), token);
-            loadDirectory(sha, "", token);
+            GitHubClient.Repository repo = GitHubClient.openRepository(saved.getString("repo"),
+                    saved.optString("branch"), refreshTokenForPublicFallback(saved));
+            ui(() -> showDirectory(repo, "", repo.files));
         });
     }
 
-    private void openDirectory(String sha, String path) {
-        run("جارٍ فتح المجلد…", () -> loadDirectory(sha, path, GitHubClient.accessToken(saved, store)));
-    }
-
-    private void loadDirectory(String sha, String path, String token) throws Exception {
-        JSONArray entries = GitHubClient.directory(saved.getString("repo"), sha, path, token);
-        ui(() -> {
-            files.removeAllViews();
-            label(files, path.isEmpty() ? "ملفات المستودع" : path, 18);
-            if (!path.isEmpty()) {
-                int split = path.lastIndexOf('/');
-                button(files, "المجلد السابق", () -> openDirectory(sha, split < 0 ? "" : path.substring(0, split)));
-            }
-            for (int i = 0; i < entries.length(); i++) {
-                JSONObject entry = entries.optJSONObject(i);
-                if (entry == null) continue;
-                String type = entry.optString("type");
-                String item = entry.optString("path");
-                String name = entry.optString("name");
-                if ("dir".equals(type)) button(files, "مجلد · " + name, () -> openDirectory(sha, item));
-                if ("file".equals(type) && entry.optInt("size", 24_001) <= 24_000 && GitHubClient.shareable(item)) {
-                    button(files, name, () -> openFile(sha, item, entry.optString("sha")));
-                }
-            }
-            finishWork("إصدار GitHub " + sha.substring(0, 7));
+    private void openDirectory(GitHubClient.Repository repo, String path) {
+        run("جارٍ فتح المجلد…", () -> {
+            JSONArray entries = GitHubClient.directory(repo.name, repo.revision, path, repo.token);
+            ui(() -> showDirectory(repo, path, entries));
         });
     }
 
-    private void openFile(String revision, String path, String blob) {
+    private void showDirectory(GitHubClient.Repository repo, String path, JSONArray entries) {
+        files.removeAllViews();
+        label(files, path.isEmpty() ? "ملفات المستودع" : path, 18);
+        if (!path.isEmpty()) {
+            int split = path.lastIndexOf('/');
+            button(files, "المجلد السابق", () -> openDirectory(repo, split < 0 ? "" : path.substring(0, split)));
+        }
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject entry = entries.optJSONObject(i);
+            if (entry == null) continue;
+            String type = entry.optString("type");
+            String item = entry.optString("path");
+            String name = entry.optString("name");
+            if ("dir".equals(type)) button(files, "مجلد · " + name, () -> openDirectory(repo, item));
+            if ("file".equals(type) && entry.optInt("size", 24_001) <= 24_000 && GitHubClient.shareable(item)) {
+                button(files, name, () -> openFile(repo, item, entry.optString("sha")));
+            }
+        }
+        if (entries.length() == 0) label(files, "لا توجد ملفات في هذا المجلد.", 14);
+        finishWork(repo.name + " · " + repo.revision.substring(0, 7));
+    }
+
+    private void openFile(GitHubClient.Repository repo, String path, String blob) {
         run("جارٍ تحميل الملف…", () -> {
-            String text = GitHubClient.file(saved.getString("repo"), revision, path, blob,
-                    GitHubClient.accessToken(saved, store));
+            String text = GitHubClient.file(repo.name, path, blob, repo.token);
             ui(() -> {
                 finishWork(path);
                 TextView preview = new TextView(this);
