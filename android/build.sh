@@ -63,7 +63,7 @@ if [[ -n "${MOKAI_ANDROID_ECJ_JAR:-}" ]]; then
 fi
 if [[ "$edition" == tools ]]; then
   package="$source_dir/src/org/mokai/coder"
-  sources=("$package/BotActivity.java" "$package/LocalExports.java" "$package/OfflineModel.java")
+  sources=("$package/AppUi.java" "$package/BotActivity.java" "$package/LocalExports.java" "$package/OfflineModel.java")
 else
   mapfile -d '' -t sources < <(find "$source_dir/src" -type f -name '*.java' -print0)
 fi

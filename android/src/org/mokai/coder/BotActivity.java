@@ -7,7 +7,6 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
@@ -55,8 +54,8 @@ public final class BotActivity extends Activity {
     private static final int EXPORT_FILE = 102;
     private static final int MICROPHONE = 103;
     private static final float SAMPLE_RATE = 16_000f;
-    private static final int INK = Color.rgb(23, 49, 51);
-    private static final int MUTED = Color.rgb(70, 97, 101);
+    private static final int INK = AppUi.INK;
+    private static final int MUTED = AppUi.MUTED;
     private static final String WORD = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private static final String[] KIND_LABELS = {"صوت وكتابة", "تنسيق المستندات", "تصميم الواجهات"};
 
@@ -111,13 +110,9 @@ public final class BotActivity extends Activity {
         readBots();
         tts = new TextToSpeech(this, result -> ttsReady = result == TextToSpeech.SUCCESS);
         ScrollView scroll = new ScrollView(this);
-        LinearLayout page = column();
-        page.setPadding(dp(16), dp(16), dp(16), dp(24));
-        page.setBackgroundColor(Color.rgb(245, 249, 247));
+        LinearLayout page = AppUi.page(this);
         page.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        TextView heading = text("بوتات MokAiCoder", 24, INK);
-        heading.setTypeface(null, Typeface.BOLD);
-        page.addView(heading);
+        AppUi.heading(page, "البوتات المحلية");
         page.addView(text("تُحفظ إعدادات البوتات على هذا الهاتف.", 14, MUTED));
         page.addView(button("إنشاء بوت", this::createBot));
         catalog = spinner(new String[]{});
@@ -696,14 +691,15 @@ public final class BotActivity extends Activity {
     }
 
     private Button button(String label, Runnable action) {
-        Button control = new Button(this);
-        control.setText(label);
-        control.setOnClickListener(view -> action.run());
-        return control;
+        Button button = AppUi.button(this, label, false);
+        button.setLayoutParams(AppUi.spaced(this, 7));
+        button.setOnClickListener(view -> action.run());
+        return button;
     }
 
     private EditText field(String hint, int max, boolean multiline) {
         EditText field = new EditText(this);
+        AppUi.field(field);
         field.setHint(hint);
         field.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         field.setFilters(new InputFilter[]{new InputFilter.LengthFilter(max)});

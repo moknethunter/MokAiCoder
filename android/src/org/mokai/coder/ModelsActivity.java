@@ -74,34 +74,34 @@ public final class ModelsActivity extends Activity {
         if (base != null) directory = new File(base, FOLDER);
 
         ScrollView scroll = new ScrollView(this);
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        form.setPadding(dp(16), dp(12), dp(16), dp(24));
-        form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        TextView title = new TextView(this);
-        title.setText("نماذج الذكاء على الهاتف");
-        title.setTextSize(23);
-        form.addView(title);
-        status = new TextView(this);
+        LinearLayout form = AppUi.page(this);
+        AppUi.heading(form, "نماذج الهاتف");
+        status = AppUi.text(this, "", 14, AppUi.MUTED, false);
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         form.addView(status);
+        form.addView(AppUi.text(this, "تنزيل أو استيراد", 17, AppUi.INK, true), AppUi.spaced(this, 12));
         catalog = new Spinner(this);
+        catalog.setMinimumHeight(dp(48));
         catalog.setAdapter(adapter(Arrays.asList("Qwen3‑0.6B · 484 MB", "Qwen3‑1.7B · 1.28 GB", "Qwen2.5‑Coder‑1.5B · 1.12 GB")));
         form.addView(catalog);
         form.addView(button("فحص الموارد وتنزيل النموذج", () ->
                 beginDownload(LocalModelCatalog.Model.values()[catalog.getSelectedItemPosition()])));
         form.addView(button("إلغاء تنزيل النموذج الجاري", this::cancelDownload));
         form.addView(button("استيراد نموذج GGUF من الهاتف", this::pick));
+        form.addView(AppUi.text(this, "محادثة محلية", 17, AppUi.INK, true), AppUi.spaced(this, 20));
         selection = new Spinner(this);
+        selection.setMinimumHeight(dp(48));
         form.addView(selection);
         question = new EditText(this);
+        AppUi.field(question);
         question.setHint("اكتب طلبًا للنماذج المحلية");
         question.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         question.setMinLines(2);
         question.setFilters(new InputFilter[]{new InputFilter.LengthFilter(3500)});
         form.addView(question);
-        run = button("تشغيل النموذج المحلي", this::ask);
+        run = AppUi.button(this, "تشغيل النموذج المحلي", true);
+        run.setLayoutParams(AppUi.spaced(this, 8));
+        run.setOnClickListener(view -> ask());
         form.addView(run);
         form.addView(button("إيقاف الإجابة", () -> {
             if (inference) LocalRuntime.cancel();
@@ -474,8 +474,8 @@ public final class ModelsActivity extends Activity {
     }
 
     private Button button(String label, Runnable action) {
-        Button button = new Button(this);
-        button.setText(label);
+        Button button = AppUi.button(this, label, false);
+        button.setLayoutParams(AppUi.spaced(this, 7));
         button.setOnClickListener(view -> action.run());
         return button;
     }
