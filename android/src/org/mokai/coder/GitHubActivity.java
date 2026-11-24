@@ -63,12 +63,13 @@ public final class GitHubActivity extends Activity {
         EditText repository = field(fields, "حساب GitHub أو رابط المستودع", saved.optString("repo", "moknethunter/MokAiCoder"), false);
         EditText branch = field(fields, "الفرع (فارغ للفرع الافتراضي)", saved.optString("branch"), false);
         TextView hint = label(fields, "أدخل المالك/المستودع أو الصق رابط GitHub. اكتب اسم الحساب لعرض مستودعاته العامة.", 14);
-        Button access = AppUi.button(this, "خيارات الوصول الخاص", false);
+        Button access = AppUi.button(this, "خيارات الوصول والتفويض", false);
         fields.addView(access, AppUi.spaced(this, 7));
         LinearLayout advanced = new LinearLayout(this);
         advanced.setOrientation(LinearLayout.VERTICAL);
         EditText client = field(advanced, "معرّف تطبيق GitHub للتفويض بالكود", saved.optString("client"), false);
-        EditText token = field(advanced, "رمز قراءة المستودع الخاص", "", true);
+        EditText token = field(advanced, "رمز وصول GitHub", "", true);
+        label(advanced, "لإرسال تعديلات من المحادثة، استخدم رمزًا لهذا المستودع بصلاحية كتابة المحتوى وطلبات الدمج.", 14);
         advanced.setVisibility(View.GONE);
         fields.addView(advanced);
         if (!saved.optString("token").isEmpty()) hint.append("\nالتوكن المحفوظ يُستخدم عند ترك خانته فارغة.");
@@ -102,7 +103,7 @@ public final class GitHubActivity extends Activity {
             boolean expanded = advanced.getVisibility() == View.VISIBLE;
             advanced.setVisibility(expanded ? View.GONE : View.VISIBLE);
             authorizeButton.setVisibility(expanded ? View.GONE : View.VISIBLE);
-            access.setText(expanded ? "خيارات الوصول الخاص" : "إخفاء خيارات الوصول الخاص");
+            access.setText(expanded ? "خيارات الوصول والتفويض" : "إخفاء خيارات الوصول والتفويض");
         });
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             if (busy) return;
