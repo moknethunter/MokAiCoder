@@ -30,6 +30,7 @@ import org.json.JSONObject;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.NoRouteToHostException;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -149,9 +150,13 @@ public final class MainActivity extends Activity {
         empty.setGravity(Gravity.CENTER_VERTICAL);
         empty.setPadding(dp(16), dp(24), dp(16), dp(24));
         empty.addView(label("كيف أساعدك؟", 26, INK, true));
-        Button edit = button("تعديل ملفات GitHub", false);
+        Button edit = button("مهمة على مستودع GitHub", false);
         edit.setOnClickListener(view -> {
-            if (!editingGitHub && active == null && prompt.length() == 0) insertGitHubEditExample();
+            if (!editingGitHub && active == null && prompt.length() == 0) {
+                prompt.setText(GitHubTask.PREFIX + " ");
+                prompt.requestFocus();
+                prompt.setSelection(prompt.length());
+            }
         });
         empty.addView(edit, AppUi.spaced(this, 12));
         body.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -581,8 +586,10 @@ public final class MainActivity extends Activity {
 
     private void sendPrompt() {
         String question = prompt.getText().toString().trim();
-        if (GitHubEdit.isCommand(question)) {
-            prepareGitHubEdits(question);
+        boolean assistantTask = GitHubTask.isCommand(question);
+        if (assistantTask || GitHubEdit.isCommand(question)) {
+            if (!assistantTask && GitHubEdit.isExactCommand(question)) prepareGitHubEdits(question);
+            else confirmGitHubTask(question);
             return;
         }
         if (LocalModelCatalog.downloadCommand(question)) {
@@ -638,16 +645,8 @@ public final class MainActivity extends Activity {
                 GitHubClient.EditPlan plan = GitHubClient.previewEdits(repository, branch, githubEditToken(connection), edits);
                 runOnUiThread(() -> {
                     if (closed) return;
-                    if (prompt.getText().toString().trim().equals(question)) prompt.getText().clear();
-                    appendMessage("أنت", question, true);
-                    TextView summary = appendMessage("GitHub", "معاينة التعديلات على " + plan.repository
-                            + " · " + plan.base, false);
-                    LinearLayout card = (LinearLayout) summary.getParent();
-                    Button review = button("راجع التعديلات وأرسلها", true);
-                    card.addView(review, AppUi.spaced(this, 9));
-                    review.setOnClickListener(view -> confirmGitHubEdits(plan, branch, review));
+                    showGitHubPreview(question, branch, plan);
                     setGitHubWorking(false, "المعاينة جاهزة للمراجعة.");
-                    scrollToEnd();
                 });
             } catch (Exception problem) {
                 runOnUiThread(() -> {
@@ -655,6 +654,115 @@ public final class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private void confirmGitHubTask(String question) {
+        String task = GitHubTask.task(question);
+        if (task.isEmpty() || task.length() > 6000) {
+            sessionStatus("اكتب وصف المهمة بعد /مهمة، واذكر مسارات الملفات المعنية إن كانت معروفة.");
+            prompt.requestFocus();
+            return;
+        }
+        ChatClient.Settings selected = settings;
+        if (selected == null) {
+            connectionDialog();
+            return;
+        }
+        final String repository;
+        final String branch;
+        try {
+            JSONObject connection = connections.read("github");
+            repository = connection.optString("repo");
+            branch = connection.optString("branch");
+            if (repository.isEmpty()) throw new IOException("اربط مستودع GitHub من قائمة المشروع أولًا.");
+        } catch (Exception problem) {
+            sessionStatus(errorText(problem));
+            return;
+        }
+        LinearLayout fields = AppUi.page(this);
+        String provider = PROVIDER_LABELS[providerIndex(selected.provider)];
+        String destination = selected.server
+                ? selected.base.getHost() + " · " + provider : provider;
+        String explanation = "المستودع " + repository + "\nالفرع " + (branch.isEmpty() ? "الافتراضي" : branch)
+                + "\nسيُرسل وصف المهمة ومحتوى الملفات المحددة إلى " + destination + " لتوليد الاقتراح.";
+        if (selected.collaborates()) explanation += "\nمزود المراجعة " + PROVIDER_LABELS[providerIndex(selected.reviewer)];
+        if (selected.paid()) explanation += "\nقد يُخصم الطلب من رصيد API.";
+        fields.addView(label(explanation, 15, INK, false));
+        EditText paths = field("مسار ملف في كل سطر", InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        paths.setTextDirection(View.TEXT_DIRECTION_LTR);
+        paths.setText(String.join("\n", GitHubTask.mentionedPaths(task)));
+        addField(fields, "الملفات المسموح بمراجعتها وتعديلها", paths);
+        TextView feedback = label("", 14, MUTED, false);
+        fields.addView(feedback);
+        ScrollView area = new ScrollView(this);
+        area.addView(fields);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("جهّز مهمة GitHub")
+                .setView(area)
+                .setNegativeButton("إلغاء", null)
+                .setPositiveButton("أرسل للمساعد", null)
+                .show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            try {
+                List<String> files = GitHubTask.selectedPaths(paths.getText().toString());
+                dialog.dismiss();
+                runGitHubTask(question, task, repository, branch, files, selected);
+            } catch (IOException invalid) {
+                feedback.setText(invalid.getMessage());
+            }
+        });
+    }
+
+    private void runGitHubTask(String question, String task, String repository, String branch, List<String> files,
+                               ChatClient.Settings selected) {
+        ChatClient.Call call = new ChatClient.Call();
+        setActive(call, "جارٍ قراءة ملفات المهمة من GitHub…");
+        dismissKeyboard();
+        network.execute(() -> {
+            try {
+                JSONObject connection = connections.read("github");
+                if (!repository.equalsIgnoreCase(connection.optString("repo"))
+                        || !branch.equals(connection.optString("branch"))) {
+                    throw new IOException("تغيّر ربط المستودع أو الفرع. أرسل المهمة من جديد.");
+                }
+                String token = connection.optString("token").isEmpty() ? "" : githubEditToken(connection);
+                GitHubClient.EditSnapshot snapshot = GitHubClient.readEditSnapshot(repository, branch, token, files);
+                if (call.isCancelled()) throw new IOException("أوقفت الطلب.");
+                Map<String, String> contents = snapshot.contents();
+                JSONArray request = GitHubTask.messages(task, contents);
+                runOnUiThread(() -> {
+                    if (isCurrent(call) && !call.isCancelled()) sessionStatus("المساعد يجهّز اقتراح التعديلات…");
+                });
+                String answer = call.chat(selected, request, ignored -> {});
+                if (call.isCancelled()) throw new IOException("أوقفت الطلب.");
+                GitHubClient.EditPlan plan = snapshot.plan(GitHubTask.proposal(answer, contents.keySet()));
+                runOnUiThread(() -> {
+                    if (!isCurrent(call)) return;
+                    if (call.isCancelled()) {
+                        setActive(null, "أوقفت الطلب.");
+                        return;
+                    }
+                    showGitHubPreview(question, branch, plan);
+                    setActive(null, "اقتراح المساعد جاهز للمراجعة.");
+                });
+            } catch (Exception problem) {
+                runOnUiThread(() -> {
+                    if (isCurrent(call)) setActive(null, errorText(call, problem));
+                });
+            }
+        });
+    }
+
+    private void showGitHubPreview(String question, String branch, GitHubClient.EditPlan plan) {
+        if (prompt.getText().toString().trim().equals(question)) prompt.getText().clear();
+        appendMessage("أنت", question, true);
+        TextView summary = appendMessage("GitHub", "معاينة التعديلات على " + plan.repository + " · " + plan.base, false);
+        LinearLayout card = (LinearLayout) summary.getParent();
+        Button review = button("راجع التعديلات وأرسلها", true);
+        card.addView(review, AppUi.spaced(this, 9));
+        review.setOnClickListener(view -> confirmGitHubEdits(plan, branch, review));
+        scrollToEnd();
     }
 
     private void insertGitHubEditExample() {

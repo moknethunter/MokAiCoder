@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import javax.net.ssl.HttpsURLConnection;
 
@@ -102,8 +103,9 @@ public final class GitHubClientTest {
         same("another-org/project", GitHubClient.publicRepositories("another-org", 2)
                 .getJSONObject(0).getString("full_name"));
         testChatEdits();
+        testAssistantProposals();
         if (!responses.isEmpty()) throw new AssertionError("Not all expected requests ran");
-        System.out.println("GitHub browsing, multi-file chat edits, stale previews and publication recovery passed.");
+        System.out.println("GitHub browsing, assistant proposals, multi-file chat edits and publication recovery passed.");
     }
 
     private static void testChatEdits() throws Exception {
@@ -177,7 +179,60 @@ public final class GitHubClientTest {
         same("https://github.com/owner/project/pull/17", result.url);
     }
 
+    private static void testAssistantProposals() throws Exception {
+        String order = "/مهمة اشرح التشغيل في README.md. ثم عدّل `run.js`";
+        same(true, GitHubTask.isCommand(order));
+        same(List.of("README.md", "run.js"), GitHubTask.mentionedPaths(GitHubTask.task(order)));
+        same(List.of("README.md", "run.js"), GitHubTask.selectedPaths("README.md\nrun.js\nREADME.md"));
+        same(false, GitHubTask.isCommand("/مهمةأخرى"));
+
+        GitHubClient.EditSnapshot snapshot = snapshot(List.of("README.md", "run.js"));
+        Map<String, String> contents = snapshot.contents();
+        JSONObject message = GitHubTask.messages(GitHubTask.task(order), contents).getJSONObject(0);
+        same("user", message.getString("role"));
+        String context = message.getString("content");
+        if (!context.contains("README.md") || !context.contains("old\\n") || context.contains("edit-token")) {
+            throw new AssertionError("Prompt should contain verified files and no GitHub credential");
+        }
+        String modelAnswer = "{\"changes\":[{\"path\":\"README.md\",\"before\":\"old\",\"after\":\"new\"},"
+                + "{\"path\":\"run.js\",\"before\":\"y\",\"after\":\"z\"}]}";
+        GitHubClient.EditPlan plan = snapshot.plan(GitHubTask.proposal("```json\n" + modelAnswer + "\n```", contents.keySet()));
+        if (!plan.preview.contains("- old\n+ new") || !plan.preview.contains("- y\n+ z")) {
+            throw new AssertionError("Assistant proposals should use the verified working copy");
+        }
+        for (String invalid : List.of(modelAnswer.replace("run.js", "other.js"), modelAnswer + "{}", "{\"changes\":[]}")) {
+            try {
+                GitHubTask.proposal(invalid, contents.keySet());
+                throw new AssertionError("Accepted invalid assistant proposal");
+            } catch (IOException expected) {
+                // Malformed proposals, edits outside the selected paths and empty proposals stop here.
+            }
+        }
+        try {
+            snapshot.plan(GitHubTask.proposal(modelAnswer.replace("old", "imaginary"), contents.keySet()));
+            throw new AssertionError("Accepted a replacement that is missing from the verified file");
+        } catch (IOException expected) {
+            if (!expected.getMessage().contains("النص القديم")) throw expected;
+        }
+        try {
+            GitHubTask.messages("task", Map.of("README.md", "x".repeat(24_000)));
+            throw new AssertionError("Accepted oversized provider context");
+        } catch (IOException expected) {
+            if (!expected.getMessage().contains("السياق")) throw expected;
+        }
+    }
+
     private static GitHubClient.EditPlan preview(Map<String, List<GitHubEdit.Replacement>> edits) throws Exception {
+        queueSnapshot();
+        return GitHubClient.previewEdits("owner/project", "", "edit-token", edits);
+    }
+
+    private static GitHubClient.EditSnapshot snapshot(List<String> paths) throws Exception {
+        queueSnapshot();
+        return GitHubClient.readEditSnapshot("owner/project", "", "edit-token", paths);
+    }
+
+    private static void queueSnapshot() {
         reply(REPO, TOKEN, 200, "{\"default_branch\":\"main\"}");
         reply(REPO + "/git/ref/heads/main", TOKEN, 200, ref(REVISION));
         reply(REPO + "/git/commits/" + REVISION, TOKEN, 200, "{\"tree\":" + object(BASE_TREE) + "}");
@@ -188,7 +243,6 @@ public final class GitHubClientTest {
                         .put(new JSONObject(object(otherBlob)).put("path", "run.js").put("mode", "100755").put("type", "blob"))).toString());
         blob(BLOB, "old\n");
         blob(otherBlob, "x\r\ny\r\n");
-        return GitHubClient.previewEdits("owner/project", "", "edit-token", edits);
     }
 
     private static void blob(String sha, String text) {

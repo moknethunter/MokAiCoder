@@ -13,6 +13,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -156,6 +157,11 @@ final class GitHubClient {
 
     static EditPlan previewEdits(String repository, String branch, String token,
                                  Map<String, List<GitHubEdit.Replacement>> edits) throws Exception {
+        return readEditSnapshot(repository, branch, token, edits.keySet()).plan(edits);
+    }
+
+    static EditSnapshot readEditSnapshot(String repository, String branch, String token,
+                                         Iterable<String> paths) throws Exception {
         String url = repoUrl(repository);
         JSONObject details = (JSONObject) request(url, token, null);
         String base = branch.isEmpty() ? details.getString("default_branch") : branch;
@@ -163,22 +169,13 @@ final class GitHubClient {
         JSONObject commit = (JSONObject) request(url + "/git/commits/" + revision, token, null);
         String baseTree = sha(commit.getJSONObject("tree"));
         Map<String, JSONArray> directories = new HashMap<>();
-        JSONArray changes = new JSONArray();
-        StringBuilder preview = new StringBuilder();
-        for (Map.Entry<String, List<GitHubEdit.Replacement>> entry : edits.entrySet()) {
-            String path = entry.getKey();
+        Map<String, EditFile> files = new LinkedHashMap<>();
+        for (String path : paths) {
+            GitHubEdit.checkPath(path);
             JSONObject item = treeFile(url, baseTree, path, token, directories);
-            String original = file(repository, path, sha(item), token);
-            String content = GitHubEdit.apply(path, original, entry.getValue());
-            changes.put(new JSONObject().put("path", path).put("type", "blob")
-                    .put("mode", item.getString("mode")).put("content", content));
-            preview.append('\n').append(path).append('\n');
-            for (GitHubEdit.Replacement operation : entry.getValue()) {
-                preview.append("- ").append(operation.before.replace("\n", "\n- ")).append('\n');
-                preview.append("+ ").append(operation.after.replace("\n", "\n+ ")).append('\n');
-            }
+            files.put(path, new EditFile(item.getString("mode"), file(repository, path, sha(item), token)));
         }
-        return new EditPlan(repository, base, revision, baseTree, changes, preview.toString());
+        return new EditSnapshot(repository, base, revision, baseTree, files);
     }
 
     private static JSONObject treeFile(String url, String tree, String path, String token,
@@ -222,6 +219,60 @@ final class GitHubClient {
         String value = object.getString("sha");
         if (!value.matches("[a-f0-9]{40}")) throw new IOException("تعذّر التحقق من إصدار GitHub.");
         return value;
+    }
+
+    static final class EditSnapshot {
+        private final String repository;
+        private final String base;
+        private final String revision;
+        private final String baseTree;
+        private final Map<String, EditFile> files;
+
+        EditSnapshot(String repository, String base, String revision, String baseTree, Map<String, EditFile> files) {
+            this.repository = repository;
+            this.base = base;
+            this.revision = revision;
+            this.baseTree = baseTree;
+            this.files = files;
+        }
+
+        Map<String, String> contents() {
+            Map<String, String> contents = new LinkedHashMap<>();
+            for (Map.Entry<String, EditFile> entry : files.entrySet()) {
+                contents.put(entry.getKey(), entry.getValue().content);
+            }
+            return contents;
+        }
+
+        EditPlan plan(Map<String, List<GitHubEdit.Replacement>> edits) throws Exception {
+            JSONArray changes = new JSONArray();
+            StringBuilder preview = new StringBuilder();
+            for (Map.Entry<String, List<GitHubEdit.Replacement>> entry : edits.entrySet()) {
+                String path = entry.getKey();
+                EditFile source = files.get(path);
+                if (source == null) throw new IOException("يتضمن الاقتراح ملفًا خارج القائمة التي وافقت عليها.");
+                String content = GitHubEdit.apply(path, source.content, entry.getValue());
+                changes.put(new JSONObject().put("path", path).put("type", "blob")
+                        .put("mode", source.mode).put("content", content));
+                preview.append('\n').append(path).append('\n');
+                for (GitHubEdit.Replacement operation : entry.getValue()) {
+                    preview.append("- ").append(operation.before.replace("\n", "\n- ")).append('\n');
+                    preview.append("+ ").append(operation.after.replace("\n", "\n+ ")).append('\n');
+                }
+            }
+            if (changes.length() == 0) throw new IOException("لم ينتج عن المهمة أي تعديل قابل للمعاينة.");
+            return new EditPlan(repository, base, revision, baseTree, changes, preview.toString());
+        }
+    }
+
+    private static final class EditFile {
+        final String mode;
+        final String content;
+
+        EditFile(String mode, String content) {
+            this.mode = mode;
+            this.content = content;
+        }
     }
 
     static Publication publishEdits(EditPlan plan, String token) throws Exception {

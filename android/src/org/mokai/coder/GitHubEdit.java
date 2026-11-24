@@ -9,12 +9,20 @@ import java.util.Map;
 
 final class GitHubEdit {
     static final String EXAMPLE = "/تعديل\nملف: README.md\nابحث:\n```\nالنص القديم\n```\nاستبدل:\n```\nالنص الجديد\n```";
-    private static final int MAX_OPERATIONS = 12;
+    static final int MAX_OPERATIONS = 12;
 
     static boolean isCommand(String message) {
-        String firstLine = message.split("\\R", 2)[0].trim();
+        String firstLine = firstLine(message);
         return firstLine.matches("(?iu)/تعديل(?:\\s.*)?")
-                || firstLine.matches("(?iu)(?:عد[ّ]?ل|أدخل|ادخل|طب[ّ]?ق)\\s.*(?:ملف|github).*");
+                || firstLine.matches("(?iu)(?:عد[ّ]?ل|أدخل|ادخل|طب[ّ]?ق|[أا]ريد تعديل)\\s.*(?:ملف|github).*");
+    }
+
+    static boolean isExactCommand(String message) {
+        return firstLine(message).matches("/تعديل(?:\\s.*)?") || message.matches("(?s).*\\R\\s*ابحث:.*");
+    }
+
+    private static String firstLine(String message) {
+        return message.split("\\R", 2)[0].trim();
     }
 
     static Map<String, List<Replacement>> parse(String message) throws IOException {
@@ -42,7 +50,7 @@ final class GitHubEdit {
         return files;
     }
 
-    private static void checkPath(String path) throws IOException {
+    static void checkPath(String path) throws IOException {
         if (path.length() > 300 || !GitHubClient.shareable(path)
                 || path.matches(".*[\\\\\\p{Cntrl}\\p{Cf}].*")) throw invalidPath(path);
         String[] parts = path.split("/", -1);
